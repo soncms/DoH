@@ -85,7 +85,11 @@ func prepareUpstreamsConfig(items []Upstream, timeout time.Duration, logger *log
 		}
 	}
 	logWriter := slogWriter{logger: logger}
-	options := &proxyupstream.Options{Logger: slog.New(slog.NewTextHandler(logWriter, nil)), Timeout: timeout, Bootstrap: bootstrap}
+	upstreamTimeout := timeout
+	if upstreamTimeout <= 0 || upstreamTimeout > 3*time.Second {
+		upstreamTimeout = 3 * time.Second
+	}
+	options := &proxyupstream.Options{Logger: slog.New(slog.NewTextHandler(logWriter, nil)), Timeout: upstreamTimeout, Bootstrap: bootstrap}
 	return dnsproxy.ParseUpstreamsConfig(lines, options)
 }
 
@@ -184,6 +188,10 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 	}
 	const maxAttempts = 2
 	var lastErr error
+	perAttemptTimeout := 2 * time.Second
+	if e.timeout > 0 && e.timeout < perAttemptTimeout {
+		perAttemptTimeout = e.timeout
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Copy the request because dnsproxy mutates the message in place
 		// (EDNS0 flags, ID handling) and the same query is reused on retry.
@@ -192,7 +200,9 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 			Proto: dnsproxy.ProtoUDP,
 		}
 		handler := requestLogHandler{ring: e.requests}
-		lastErr = handler.ServeDNS(ctx, e.proxy, dctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		lastErr = handler.ServeDNS(attemptCtx, e.proxy, dctx)
+		cancel()
 		// ServeDNS always fills dctx.Res, even with a synthetic SERVFAIL when
 		// every upstream fails, so a non-nil response does not mean success.
 		// Retry only when the upstream exchange itself returned an error.

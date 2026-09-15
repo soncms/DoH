@@ -143,40 +143,38 @@ func (i *Interceptor) answer(packet dnsDatagram, addr winDivertAddress) {
 	if i.ctx.Err() != nil {
 		return
 	}
-	var response *dns.Msg
-	if err == nil {
-		response = new(dns.Msg)
-		err = response.Unpack(wire)
+	if err != nil || len(wire) == 0 {
+		if i.resolver != nil && i.resolver.engine == nil {
+			i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
+		}
+		return
 	}
-	if err != nil || response == nil {
-		i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
-		response = new(dns.Msg)
-		response.SetReply(request)
-		response.Rcode = dns.RcodeServerFailure
-		response.RecursionAvailable = true
+	response := new(dns.Msg)
+	if err := response.Unpack(wire); err != nil {
+		if i.resolver != nil && i.resolver.engine == nil {
+			i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
+		}
+		i.log.Printf("unpack intercepted DNS response: %v", err)
+		return
 	}
 	response.Id = request.Id
 	wire, err = response.Pack()
 	if err != nil {
-		i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
 		i.log.Printf("pack intercepted DNS response: %v", err)
 		return
 	}
 	raw, err := packet.reply(wire)
 	if err != nil {
-		i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
 		i.log.Printf("build intercepted DNS response: %v", err)
 		return
 	}
 	addr.Flags &^= winDivertOutbound
 	ok, _, err := i.checksum.Call(uintptr(unsafe.Pointer(&raw[0])), uintptr(len(raw)), uintptr(unsafe.Pointer(&addr)), 0)
 	if ok == 0 {
-		i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
 		i.log.Printf("calculate DNS packet checksum: %v", err)
 		return
 	}
 	if err := i.sendPacket(raw, &addr); err != nil {
-		i.resolver.recordInterceptIssue(request.Question[0].Name, dns.TypeToString[request.Question[0].Qtype], "ERROR", err)
 		i.log.Printf("inject DoH response: %v", err)
 		return
 	}

@@ -81,15 +81,13 @@ func (s *dnsIPCServer) serve() {
 		s.mu.Unlock()
 		err = windows.ConnectNamedPipe(h, nil)
 		if err != nil && !errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
-			windows.CloseHandle(h)
+			_ = windows.CloseHandle(h)
 			s.mu.Lock()
 			s.active = 0
 			s.mu.Unlock()
 			continue
 		}
 		s.handle(h)
-		_ = windows.DisconnectNamedPipe(h)
-		_ = windows.CloseHandle(h)
 		s.mu.Lock()
 		s.active = 0
 		s.mu.Unlock()
@@ -99,6 +97,7 @@ func (s *dnsIPCServer) serve() {
 func (s *dnsIPCServer) handle(h windows.Handle) {
 	f := os.NewFile(uintptr(h), "SonDNS IPC")
 	if f == nil {
+		_ = windows.CloseHandle(h)
 		return
 	}
 	defer f.Close()
@@ -189,7 +188,7 @@ func callDNSIPC(req dnsIPCRequest) (dnsIPCResponse, error) {
 	name, _ := windows.UTF16PtrFromString(sondnsPipeName)
 	var h windows.Handle
 	var err error
-	deadline := time.Now().Add(400 * time.Millisecond)
+	deadline := time.Now().Add(1200 * time.Millisecond)
 	for {
 		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
 		if err == nil {

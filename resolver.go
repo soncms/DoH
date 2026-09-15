@@ -152,7 +152,7 @@ func (r *Resolver) Resolve(ctx context.Context, wire []byte) ([]byte, error) {
 			return nil, fmt.Errorf("invalid DNS query: %w", err)
 		}
 		response, err := r.engine.ResolveMsg(ctx, request)
-		if err != nil && response == nil {
+		if err != nil {
 			return nil, err
 		}
 		if response == nil {
