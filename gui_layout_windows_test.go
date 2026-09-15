@@ -57,23 +57,32 @@ func TestNativeLayout(t *testing.T) {
 	if len(edited.Upstreams) != 1 || edited.Upstreams[0].URL != URLNextDNS || edited.ServiceAutoStart {
 		t.Errorf("edited config = %+v, want NextDNS upstream", edited.Upstreams)
 	}
+	fixture := make([]DNSRequestEntry, 8)
 	for i := 0; i < 8; i++ {
-		g.logModel.rows = append(g.logModel.rows, DNSRequestEntry{Domain: fmt.Sprintf("host-%d.example.", i), Type: "A", Result: "NOERROR"})
+		fixture[i] = DNSRequestEntry{Domain: fmt.Sprintf("host-%d.example.", i), Type: "A", Result: "NOERROR"}
 	}
-	fixture := append([]DNSRequestEntry(nil), g.logModel.rows...)
-	g.applyLogRows(fixture, 1, "inst-1")
-	g.applyLogRows(nil, 3, "inst-1")
-	g.applyLogRows(fixture, 2, "inst-1")
+	// Simulate: service has 8 entries (version=8). GUI starts fresh (version=0).
+	g.logModel.rows = nil
+	g.logVersion = 0
+	g.instanceID = ""
+	g.applyLogRows(fixture, 8, "inst-1")
+	g.applyLogRows(nil, 10, "inst-1")
+	g.applyLogRows(fixture, 9, "inst-1")
 	if g.logModel.RowCount() != 0 {
 		t.Error("queued pre-clear batch restored old rows")
 	}
-	g.applyLogRows(fixture, 4, "inst-1")
+	g.applyLogRows(fixture, 11, "inst-1")
 	// Test new instance after restart resets and applies despite lower version
+	g.logModel.rows = nil
+	g.logVersion = 0
+	g.instanceID = ""
 	g.applyLogRows(nil, 1, "inst-2")
 	if g.logModel.RowCount() != 0 {
 		t.Error("new instance clear should apply")
 	}
-	g.applyLogRows(fixture, 2, "inst-2")
+	g.logModel.rows = nil
+	g.logVersion = 0
+	g.applyLogRows(fixture, 8, "inst-2")
 	if g.logModel.RowCount() != 8 {
 		t.Error("new instance rows should apply")
 	}

@@ -451,6 +451,7 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 		return
 	}
 
+	// Clear (explicit or new-instance): full reset, no flicker concern.
 	if len(rows) == 0 {
 		g.logVersion = version
 		g.logModel.rows = nil
@@ -459,23 +460,74 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 		return
 	}
 
+	// Full reset needed when service restarts (new instance) so stale rows are gone.
+	if isNewInstance {
+		wasAtTop := g.requestLog.IsAtTop()
+		reversed := make([]DNSRequestEntry, len(rows))
+		for i, entry := range rows {
+			reversed[len(rows)-1-i] = entry
+		}
+		g.logVersion = version
+		g.logModel.rows = reversed
+		g.logModel.PublishRowsReset()
+		g.updateCopyActions()
+		if wasAtTop {
+			g.requestLog.EnsureItemVisible(0)
+		}
+		return
+	}
+
+	// Incremental update: prepend only NEW entries at the top.
+	// version increases by 1 per Add(), so delta = how many new entries exist.
+	delta := int(version - g.logVersion)
+	if delta <= 0 {
+		g.logVersion = version
+		return
+	}
+	if delta > len(rows) {
+		delta = len(rows)
+	}
+
+	// The ring buffer returns oldest→newest order; the last `delta` are the newest.
+	newEntries := rows[len(rows)-delta:]
+
 	wasAtTop := g.requestLog.IsAtTop()
 
-	// Reverse rows so newest is at index 0 (top of table)
-	reversed := make([]DNSRequestEntry, len(rows))
-	for i, entry := range rows {
-		reversed[len(rows)-1-i] = entry
+	// Build new display rows: newest entries reversed (newest first) prepended to existing.
+	prepend := make([]DNSRequestEntry, delta)
+	for i, e := range newEntries {
+		prepend[delta-1-i] = e
+	}
+
+	oldLen := len(g.logModel.rows)
+	combined := append(prepend, g.logModel.rows...)
+
+	// Trim tail if over capacity.
+	trimmed := 0
+	if len(combined) > maxDNSLogRows {
+		trimmed = len(combined) - maxDNSLogRows
+		combined = combined[:maxDNSLogRows]
 	}
 
 	g.logVersion = version
-	g.logModel.rows = reversed
-	g.logModel.PublishRowsReset()
+	g.logModel.rows = combined
+
+	// Notify walk: rows 0..(delta-1) inserted.
+	g.logModel.PublishRowsInserted(0, delta-1)
+
+	// Notify walk: rows trimmed off the tail.
+	if trimmed > 0 && oldLen > 0 {
+		newLen := len(combined)
+		g.logModel.PublishRowsRemoved(newLen, newLen+trimmed-1)
+	}
+
 	g.updateCopyActions()
 
 	if wasAtTop {
 		g.requestLog.EnsureItemVisible(0)
 	}
 }
+
 
 func (g *guiState) scrollLogToEnd() {
 	if g.logModel == nil || g.logModel.RowCount() == 0 {
