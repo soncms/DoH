@@ -661,14 +661,37 @@ func (tv *TableView) RowsPerPage() int {
 	return int(win.SendMessage(tv.hwndNormalLV, win.LVM_GETCOUNTPERPAGE, 0, 0))
 }
 
+// IsAtTop returns true if the first item in the table is currently visible at the top.
+func (tv *TableView) IsAtTop() bool {
+	if tv.model == nil || tv.model.RowCount() == 0 {
+		return true
+	}
+	return win.SendMessage(tv.hwndNormalLV, win.LVM_GETTOPINDEX, 0, 0) == 0
+}
+
 // IsAtBottom returns true if the last item in the table is currently visible.
 func (tv *TableView) IsAtBottom() bool {
 	if tv.model == nil || tv.model.RowCount() == 0 {
 		return true
 	}
+	lastIdx := tv.model.RowCount() - 1
+	if tv.ItemVisible(lastIdx) {
+		return true
+	}
+	var si win.SCROLLINFO
+	si.CbSize = uint32(unsafe.Sizeof(si))
+	si.FMask = win.SIF_PAGE | win.SIF_POS | win.SIF_RANGE
+	if win.GetScrollInfo(tv.hwndNormalLV, win.SB_VERT, &si) {
+		if si.NPage == 0 || si.NMax == 0 {
+			return true
+		}
+		if si.NPos+int32(si.NPage) >= si.NMax {
+			return true
+		}
+	}
 	top := int(win.SendMessage(tv.hwndNormalLV, win.LVM_GETTOPINDEX, 0, 0))
 	perPage := int(win.SendMessage(tv.hwndNormalLV, win.LVM_GETCOUNTPERPAGE, 0, 0))
-	return top+perPage >= tv.model.RowCount()
+	return top+perPage+2 >= tv.model.RowCount()
 }
 
 func (tv *TableView) Invalidate() error {

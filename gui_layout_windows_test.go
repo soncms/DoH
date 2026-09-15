@@ -77,7 +77,10 @@ func TestNativeLayout(t *testing.T) {
 	if g.logModel.RowCount() != 8 {
 		t.Error("new instance rows should apply")
 	}
-	if val := g.logModel.Value(0, 1); val != "host-0.example" {
+	if val := g.logModel.Value(0, 1); val != "host-7.example" {
+		t.Errorf("domain value = %q, want %q", val, "host-7.example")
+	}
+	if val := g.logModel.Value(7, 1); val != "host-0.example" {
 		t.Errorf("domain value = %q, want %q", val, "host-0.example")
 	}
 	g.logModel.PublishRowsReset()

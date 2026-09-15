@@ -180,14 +180,14 @@ func (g *guiState) monitor() {
 			response, err := callDNSIPC(dnsIPCRequest{Op: "snapshot", Version: g.logVersion})
 			if err == nil {
 				lastLogError = ""
-				if len(response.Entries) > 0 || response.Version != g.logVersion {
+				if len(response.Entries) > 0 {
 					g.onUI(func() { g.applyLogRows(response.Entries, response.Version, response.InstanceID) })
 				}
 			} else if g.service.State == svc.Running && err.Error() != lastLogError {
 				lastLogError = err.Error()
 				g.onUI(func() { g.setStatus("DNS service: "+err.Error(), true) })
 			}
-			nextLog = now.Add(600 * time.Millisecond)
+			nextLog = now.Add(400 * time.Millisecond)
 		}
 		select {
 		case <-g.ctx.Done():
@@ -211,7 +211,7 @@ func (g *guiState) applyServiceSnapshot(s serviceSnapshot, err error) {
 		if s.Exists {
 			auto = s.autoStart()
 		}
-		if g.autoStart.Checked() != auto {
+		if !g.autoDirty && g.autoStart.Checked() != auto {
 			g.syncingAutoStart = true
 			g.autoStart.SetChecked(auto)
 			g.syncingAutoStart = false
@@ -447,16 +447,33 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 	} else if instanceID != "" && g.instanceID == "" {
 		g.instanceID = instanceID
 	}
-	if !isNewInstance && version <= g.logVersion {
+	if !isNewInstance && version <= g.logVersion && len(rows) > 0 {
 		return
 	}
-	wasAtBottom := g.requestLog.IsAtBottom()
+
+	if len(rows) == 0 {
+		g.logVersion = version
+		g.logModel.rows = nil
+		g.logModel.PublishRowsReset()
+		g.updateCopyActions()
+		return
+	}
+
+	wasAtTop := g.requestLog.IsAtTop()
+
+	// Reverse rows so newest is at index 0 (top of table)
+	reversed := make([]DNSRequestEntry, len(rows))
+	for i, entry := range rows {
+		reversed[len(rows)-1-i] = entry
+	}
+
 	g.logVersion = version
-	g.logModel.rows = rows
+	g.logModel.rows = reversed
 	g.logModel.PublishRowsReset()
 	g.updateCopyActions()
-	if wasAtBottom {
-		g.scrollLogToEnd()
+
+	if wasAtTop {
+		g.requestLog.EnsureItemVisible(0)
 	}
 }
 
