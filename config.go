@@ -18,6 +18,7 @@ type Config struct {
 	Listen           string        `json:"listen"`
 	Interception     string        `json:"interception"`
 	Upstreams        []Upstream    `json:"upstreams"`
+	BootstrapDNS     []string      `json:"bootstrap_dns,omitempty"`
 	Timeout          time.Duration `json:"timeout"`
 	LogFile          string        `json:"log_file"`
 	CacheEnabled     bool          `json:"cache_enabled"`
@@ -42,9 +43,11 @@ const (
 )
 
 var (
-	BootstrapSonCMS  = []string{
-		"172.67.129.215:443", "104.21.2.244:443",
-		"[2606:4700:3030::6815:2f4]:443", "[2606:4700:3031::ac43:81d7]:443",
+	DefaultBootstrapDNS = []string{
+		"1.1.1.1:53",
+		"1.0.0.1:53",
+		"[2606:4700:4700::1111]:53",
+		"[2606:4700:4700::1001]:53",
 	}
 	BootstrapNextDNS = []string{
 		"45.90.28.0:443", "45.90.30.0:443",
@@ -63,10 +66,9 @@ func PredefinedUpstream(name string) Upstream {
 		}
 	default:
 		return Upstream{
-			Name:      ProviderSonCMS,
-			Type:      "DNS over HTTPS",
-			URL:       URLSonCMS,
-			Bootstrap: append([]string(nil), BootstrapSonCMS...),
+			Name: ProviderSonCMS,
+			Type: "DNS over HTTPS",
+			URL:  URLSonCMS,
 		}
 	}
 }
@@ -143,6 +145,7 @@ func DefaultConfig() Config {
 		Upstreams: []Upstream{
 			PredefinedUpstream(ProviderSonCMS),
 		},
+		BootstrapDNS: append([]string(nil), DefaultBootstrapDNS...),
 	}
 }
 
@@ -173,6 +176,10 @@ func (c *Config) normalize() error {
 	if strings.TrimSpace(c.LogFile) == "" {
 		c.LogFile = defaultLogPath()
 	}
+	if len(c.BootstrapDNS) == 0 {
+		c.BootstrapDNS = append([]string(nil), DefaultBootstrapDNS...)
+	}
+	c.BootstrapDNS = normalizeBootstrapDNS(c.BootstrapDNS)
 	if len(c.Upstreams) == 0 {
 		return errors.New("at least one encrypted DNS upstream is required")
 	}
@@ -221,6 +228,25 @@ func (c *Config) normalize() error {
 	return nil
 }
 
+func normalizeBootstrapDNS(list []string) []string {
+	res := make([]string, 0, len(list))
+	for _, s := range list {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(s); err != nil {
+			if strings.Contains(s, ":") && !strings.HasPrefix(s, "[") {
+				s = fmt.Sprintf("[%s]:53", s)
+			} else {
+				s = net.JoinHostPort(s, "53")
+			}
+		}
+		res = append(res, s)
+	}
+	return res
+}
+
 func supportedUpstreamScheme(scheme string) bool {
 	switch strings.ToLower(scheme) {
 	case "https", "tls", "quic", "sdns":
@@ -235,8 +261,6 @@ func supportedUpstreamScheme(scheme string) bool {
 // enabled: resolving the DoH hostname through the same proxy would recurse.
 func bootstrapForHost(host string) []string {
 	switch strings.TrimSuffix(strings.ToLower(host), ".") {
-	case "dns.soncms.net":
-		return append([]string(nil), BootstrapSonCMS...)
 	case "dns.nextdns.io":
 		return append([]string(nil), BootstrapNextDNS...)
 	case "cloudflare-dns.com", "one.one.one.one":
