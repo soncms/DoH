@@ -1,0 +1,24 @@
+{
+  "listen": "127.0.0.1:5300",
+  "interception": "off",
+  "timeout": "5s",
+  "service_auto_start": false,
+  "cache_enabled": true,
+  "cache_size_bytes": 67108864,
+  "upstreams": [
+    {
+      "name": "Cloudflare",
+      "type": "DNS over HTTPS",
+      "url": "https://cloudflare-dns.com/dns-query",
+      "bootstrap": ["1.1.1.1:443", "1.0.0.1:443"]
+    },
+    {
+      "name": "Google",
+      "type": "DNS over HTTPS",
+      "url": "https://dns.google/dns-query",
+      "bootstrap": ["8.8.8.8:443", "8.8.4.4:443"]
+    }
+  ],
+  "log_file": "C:\\ProgramData\\SonDNS\\sondns.log"
+}
+

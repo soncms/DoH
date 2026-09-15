@@ -1,0 +1,8 @@
+*.exe
+*.exe~
+*.log
+q.bin
+test*.json
+windivert-test.json
+.commandcode/
+
