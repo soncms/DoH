@@ -168,7 +168,30 @@ func startRuntime(c Config, logger *log.Logger) (func(), error) {
 			return nil, err
 		}
 	}
+	dpi, err := NewDPIBackend(c, logger)
+	if err != nil {
+		if interceptor != nil {
+			interceptor.Shutdown()
+		}
+		_ = engine.Shutdown(context.Background())
+		instance.Close()
+		return nil, err
+	}
+	if dpi != nil {
+		if err := dpi.Start(); err != nil {
+			dpi.Shutdown()
+			if interceptor != nil {
+				interceptor.Shutdown()
+			}
+			_ = engine.Shutdown(context.Background())
+			instance.Close()
+			return nil, err
+		}
+	}
 	return func() {
+		if dpi != nil {
+			dpi.Shutdown()
+		}
 		if interceptor != nil {
 			interceptor.Shutdown()
 		}
@@ -310,12 +333,26 @@ func uninstallService() error {
 		return err
 	}
 	defer m.Disconnect()
+	serviceExe := ""
 	s, err := m.OpenService(serviceName)
 	if err != nil {
-		_ = cleanupWinDivertDriver()
-		return err
+		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return err
+		}
+		_ = syncGUIAutostart(false)
+		if err := cleanupWinDivertDriver(); err != nil {
+			return err
+		}
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return exeErr
+		}
+		return purgeSonDNSInstall(exe)
 	}
 	defer s.Close()
+	if cfg, configErr := s.Config(); configErr == nil {
+		serviceExe = serviceBinaryPath(cfg.BinaryPathName)
+	}
 	if _, err := s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
 		return err
 	}
@@ -326,7 +363,70 @@ func uninstallService() error {
 		return err
 	}
 	_ = syncGUIAutostart(false)
-	return cleanupWinDivertDriver()
+	if err := cleanupWinDivertDriver(); err != nil {
+		return err
+	}
+	if serviceExe == "" {
+		serviceExe, _ = os.Executable()
+	}
+	return purgeSonDNSInstall(serviceExe)
+}
+
+func serviceBinaryPath(commandLine string) string {
+	commandLine = strings.TrimSpace(commandLine)
+	if commandLine == "" {
+		return ""
+	}
+	if commandLine[0] == '"' {
+		if end := strings.IndexByte(commandLine[1:], '"'); end >= 0 {
+			return commandLine[1 : end+1]
+		}
+	}
+	if fields := strings.Fields(commandLine); len(fields) > 0 {
+		return strings.Trim(fields[0], `"`)
+	}
+	return ""
+}
+
+// purgeSonDNSInstall removes only data owned by this installation. The
+// executable, GUI and workspace source/dist files are intentionally kept so
+// the user can install the service again immediately.
+func purgeSonDNSInstall(installedExe string) error {
+	base := strings.TrimSpace(os.Getenv("ProgramData"))
+	if base == "" {
+		return errors.New("ProgramData is unavailable; refusing to purge install files")
+	}
+	appDir := filepath.Join(base, "SonDNS")
+	if err := os.RemoveAll(appDir); err != nil {
+		return fmt.Errorf("remove %s: %w", appDir, err)
+	}
+	if installedExe == "" {
+		return nil
+	}
+	installedExe, err := filepath.Abs(installedExe)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(filepath.Base(installedExe), "SonDNS.exe") {
+		return nil
+	}
+	dir := filepath.Dir(installedExe)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "SonDNS.exe.bak-") || strings.HasPrefix(name, "SonDNS.exe.backup-") || name == "SonDNS.exe~" {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func serviceStatus() error {

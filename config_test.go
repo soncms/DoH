@@ -82,6 +82,64 @@ func TestNormalizeEncryptedUpstreamSchemes(t *testing.T) {
 	}
 }
 
+func TestNormalizeInterceptionMode(t *testing.T) {
+	for _, mode := range []string{"", "windivert", " WINDIVERT "} {
+		c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, Interception: mode}
+		if err := c.normalize(); err != nil {
+			t.Fatalf("interception %q rejected: %v", mode, err)
+		}
+		if c.Interception != "windivert" {
+			t.Fatalf("interception %q normalized to %q", mode, c.Interception)
+		}
+	}
+	for _, mode := range []string{"off", " OFF ", "invalid"} {
+		c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, Interception: mode}
+		if err := c.normalize(); err == nil {
+			t.Fatalf("disabled or invalid interception mode %q was accepted", mode)
+		}
+	}
+}
+
+func TestNormalizeDPIBackendIsFailOpen(t *testing.T) {
+	c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, DPI: DPIConfig{Enabled: true}}
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.DPI.Backend != "embedded-zapret2" || !c.DPI.FailOpen {
+		t.Fatalf("unexpected DPI defaults: %+v", c.DPI)
+	}
+}
+
+func TestDefaultConfigEnablesEmbeddedDPI(t *testing.T) {
+	c := DefaultConfig()
+	if !c.DPI.Enabled || c.DPI.Backend != "embedded-zapret2" || !c.DPI.FailOpen {
+		t.Fatalf("unexpected default DPI configuration: %+v", c.DPI)
+	}
+}
+
+func TestNormalizeDPICaptureModes(t *testing.T) {
+	for _, mode := range []string{"", "default", "TCP", "tcp+udp"} {
+		c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, DPI: DPIConfig{CaptureMode: mode}}
+		if err := c.normalize(); err != nil {
+			t.Fatalf("capture mode %q rejected: %v", mode, err)
+		}
+		if c.DPI.CaptureMode == "" {
+			t.Fatal("capture mode was not defaulted")
+		}
+	}
+	bad := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, DPI: DPIConfig{CaptureMode: "udp-all"}}
+	if err := bad.normalize(); err == nil {
+		t.Fatal("unknown capture mode accepted")
+	}
+}
+
+func TestNormalizeRejectsUnknownDPIBackend(t *testing.T) {
+	c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, DPI: DPIConfig{Backend: "native"}}
+	if err := c.normalize(); err == nil {
+		t.Fatal("unknown DPI backend accepted")
+	}
+}
+
 func TestLegacyConfigMigratesLogAndStartupWithoutWriting(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-created.json")
 	if _, err := LoadConfig(missing); err != nil {

@@ -5,4 +5,9 @@ q.bin
 test*.json
 windivert-test.json
 .commandcode/
+dist/
+
+# The single-file build embeds these upstream runtime assets.
+!third_party/zapret2/*.exe
+!third_party/zapret2/*.dll
 

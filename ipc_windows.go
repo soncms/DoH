@@ -20,24 +20,28 @@ import (
 const sondnsPipeName = `\\.\pipe\SonDNS\control`
 
 type dnsIPCRequest struct {
-	Op        string     `json:"op"`
-	Version   uint64     `json:"version,omitempty"`
-	Upstreams []Upstream `json:"upstreams,omitempty"`
+	Op         string     `json:"op"`
+	InstanceID string     `json:"instance_id,omitempty"`
+	Version    uint64     `json:"version,omitempty"`
+	Upstreams  []Upstream `json:"upstreams,omitempty"`
 }
 type dnsIPCResponse struct {
-	OK         bool              `json:"ok"`
-	InstanceID string            `json:"instance_id,omitempty"`
-	Version    uint64            `json:"version,omitempty"`
-	Entries    []DNSRequestEntry `json:"entries,omitempty"`
-	Error      string            `json:"error,omitempty"`
+	OK              bool              `json:"ok"`
+	Unchanged       bool              `json:"unchanged,omitempty"`
+	InstanceID      string            `json:"instance_id,omitempty"`
+	SchemaVersion   int               `json:"schema_version,omitempty"`
+	Version         uint64            `json:"version,omitempty"`
+	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
+	Entries         []DNSRequestEntry `json:"entries,omitempty"`
+	Error           string            `json:"error,omitempty"`
 }
 
 type dnsEngineProxy interface {
-	ClearCache()
 	SetUpstreams([]Upstream) error
 }
 
 type dnsIPCServer struct {
+	pipeName   string
 	instanceID string
 	ring       *DNSRequestRing
 	proxy      dnsEngineProxy
@@ -49,7 +53,7 @@ type dnsIPCServer struct {
 
 func newDNSIPCServer(ring *DNSRequestRing, proxy dnsEngineProxy) *dnsIPCServer {
 	id := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
-	return &dnsIPCServer{instanceID: id, ring: ring, proxy: proxy, stop: make(chan struct{}), done: make(chan struct{})}
+	return &dnsIPCServer{pipeName: sondnsPipeName, instanceID: id, ring: ring, proxy: proxy, stop: make(chan struct{}), done: make(chan struct{})}
 }
 
 func (s *dnsIPCServer) start() { go s.serve() }
@@ -57,7 +61,7 @@ func (s *dnsIPCServer) start() { go s.serve() }
 func (s *dnsIPCServer) serve() {
 	defer close(s.done)
 	sd, _ := windows.SecurityDescriptorFromString("D:P(A;;GA;;;IU)")
-	name, _ := windows.UTF16PtrFromString(sondnsPipeName)
+	name, _ := windows.UTF16PtrFromString(s.pipeName)
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 	for {
 		select {
@@ -111,26 +115,24 @@ func (s *dnsIPCServer) handle(h windows.Handle) {
 		writeIPC(f, dnsIPCResponse{Error: "invalid request"})
 		return
 	}
-	var resp dnsIPCResponse
+	_ = writeIPC(f, s.respond(req))
+}
+
+func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
+	resp := dnsIPCResponse{SchemaVersion: 2}
 	switch strings.ToLower(strings.TrimSpace(req.Op)) {
 	case "snapshot":
 		resp.OK = true
 		curVer := s.ring.Version()
-		if req.Version > 0 && req.Version == curVer {
+		if req.InstanceID == s.instanceID && req.Version == curVer {
 			resp.Version = curVer
+			resp.Unchanged = true
 		} else {
-			resp.Entries, resp.Version = s.ring.Snapshot()
+			resp.Entries, resp.Version, resp.OverwrittenRows = s.ring.SnapshotStats()
 		}
 	case "clear_log":
 		resp.OK = true
 		resp.Version = s.ring.Clear()
-	case "clear_cache":
-		if s.proxy == nil {
-			resp.Error = "proxy unavailable"
-		} else {
-			s.proxy.ClearCache()
-			resp.OK = true
-		}
 	case "set_upstream":
 		if s.proxy == nil {
 			resp.Error = "proxy unavailable"
@@ -145,7 +147,7 @@ func (s *dnsIPCServer) handle(h windows.Handle) {
 		resp.Error = fmt.Sprintf("unknown operation %q", req.Op)
 	}
 	resp.InstanceID = s.instanceID
-	_ = writeIPC(f, resp)
+	return resp
 }
 
 func writeIPC(f *os.File, v dnsIPCResponse) error {
@@ -173,7 +175,7 @@ func (s *dnsIPCServer) close() {
 		_ = windows.CancelIoEx(h, nil)
 		_ = windows.CloseHandle(h)
 	}
-	name, _ := windows.UTF16PtrFromString(sondnsPipeName)
+	name, _ := windows.UTF16PtrFromString(s.pipeName)
 	hWake, _ := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
 	if hWake != 0 && hWake != windows.InvalidHandle {
 		_ = windows.CloseHandle(hWake)
@@ -185,12 +187,16 @@ func (s *dnsIPCServer) close() {
 }
 
 func callDNSIPC(req dnsIPCRequest) (dnsIPCResponse, error) {
-	name, _ := windows.UTF16PtrFromString(sondnsPipeName)
+	return callDNSIPCAt(sondnsPipeName, req)
+}
+
+func callDNSIPCAt(pipeName string, req dnsIPCRequest) (dnsIPCResponse, error) {
+	name, _ := windows.UTF16PtrFromString(pipeName)
 	var h windows.Handle
 	var err error
 	deadline := time.Now().Add(1200 * time.Millisecond)
 	for {
-		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
+		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OVERLAPPED, 0)
 		if err == nil {
 			break
 		}
@@ -205,6 +211,15 @@ func callDNSIPC(req dnsIPCRequest) (dnsIPCResponse, error) {
 		return dnsIPCResponse{}, errors.New("invalid IPC handle")
 	}
 	defer f.Close()
+	// Connection timeout alone does not bound a stalled server's reply. An
+	// overlapped pipe lets Go cancel I/O when this deadline expires.
+	timeout := 3 * time.Second
+	if req.Op == "set_upstream" {
+		timeout = 15 * time.Second
+	}
+	if err = f.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return dnsIPCResponse{}, err
+	}
 	b, _ := json.Marshal(req)
 	b = append(b, '\n')
 	if _, err = f.Write(b); err != nil {

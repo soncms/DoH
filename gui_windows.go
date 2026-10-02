@@ -22,25 +22,35 @@ import (
 )
 
 type guiState struct {
-	mw                                         *walk.MainWindow
-	radioSonCMS, radioNextDNS                  *walk.RadioButton
-	autoStart                                  *walk.CheckBox
-	checkButton, clearButton, clearCacheButton *walk.PushButton
-	serviceButton                              *walk.SplitButton
-	stopAction, restartAction, uninstallAction *walk.Action
-	status, serviceStatus                      *walk.Label
-	requestLog                                 *walk.TableView
-	logModel                                   *requestLogModel
-	logVersion                                 uint64
-	instanceID                                 string
-	service                                    serviceSnapshot
-	copyDomainAction, copyIPAction             *walk.Action
+	mw                                                                 *walk.MainWindow
+	radioSonCMS, radioNextDNS                                          *walk.RadioButton
+	autoStart                                                          *walk.CheckBox
+	checkButton, clearButton                                           *walk.PushButton
+	serviceButton                                                      *walk.SplitButton
+	stopAction, restartAction, uninstallAction                         *walk.Action
+	status, serviceStatus                                              *walk.Label
+	detailsButton                                                      *walk.PushButton
+	dpiMode                                                            *walk.ComboBox
+	requestLog                                                         *walk.TableView
+	logModel                                                           *requestLogModel
+	logStyler                                                          *requestLogStyler
+	notifyIcon                                                         *walk.NotifyIcon
+	logVersion                                                         uint64
+	logGeneration                                                      uint64
+	logPollPending, logClearing                                        bool
+	lastLogError                                                       string
+	logHighlightGeneration                                             uint64
+	logHighlightTimer                                                  *time.Timer
+	instanceID                                                         string
+	service                                                            serviceSnapshot
+	copyDomainAction, copyIPAction, detailsAction                      *walk.Action
 	serviceKnown, autoDirty, busy, checking, exiting, syncingAutoStart bool
-	columnsInitialized                         bool
-	config                                     Config
-	configPath                                 string
-	ctx                                        context.Context
-	cancel                                     context.CancelFunc
+	syncingDPI                                                         bool
+	columnsInitialized                                                 bool
+	config                                                             Config
+	configPath                                                         string
+	ctx                                                                context.Context
+	cancel                                                             context.CancelFunc
 }
 
 func runGUI() error { return runGUIWithConfigAndTray(defaultConfigPath(), false) }
@@ -60,8 +70,7 @@ func runGUIWithConfigAndTray(path string, startInTray bool) error {
 			hwnd = win.FindWindow(nil, titlePtr)
 		}
 		if hwnd != 0 {
-			win.ShowWindow(hwnd, win.SW_RESTORE)
-			win.ShowWindow(hwnd, win.SW_SHOW)
+			restoreMainWindow(hwnd)
 			win.SetForegroundWindow(hwnd)
 		}
 		return nil
@@ -101,14 +110,74 @@ func runGUIWithConfigAndTray(path string, startInTray bool) error {
 	})
 	g.autoStart.SetChecked(c.ServiceAutoStart)
 	g.autoStart.CheckedChanged().Attach(g.toggleAutoStart)
-	trayErr := g.installTray()
-	if !startInTray || trayErr != nil {
+	g.setCaptureMode(c.DPI.CaptureMode)
+	if err = g.installTray(); err != nil {
+		return fmt.Errorf("initialize tray icon: %w", err)
+	}
+	if !startInTray {
 		mw.Show()
 		_ = g.radioSonCMS.SetFocus()
 	}
 	go g.monitor()
+	go g.monitorRequestLog()
+	go g.startServiceIfNeeded()
 	mw.Run()
 	return nil
+}
+
+var dpiCaptureModes = []string{"Default", "TCP", "TCP + QUIC UDP"}
+var dpiCaptureModeValues = []string{"default", "tcp", "tcp+udp"}
+
+type dpiCaptureModeModel struct{ walk.ListModelBase }
+
+func (m *dpiCaptureModeModel) ItemCount() int              { return len(dpiCaptureModes) }
+func (m *dpiCaptureModeModel) Value(index int) interface{} { return dpiCaptureModes[index] }
+
+func (g *guiState) captureModeValue() string {
+	idx := g.dpiMode.CurrentIndex()
+	if idx < 0 || idx >= len(dpiCaptureModeValues) {
+		return "default"
+	}
+	return dpiCaptureModeValues[idx]
+}
+
+func (g *guiState) setCaptureMode(mode string) {
+	for i, value := range dpiCaptureModeValues {
+		if value == mode {
+			g.syncingDPI = true
+			_ = g.dpiMode.SetCurrentIndex(i)
+			g.syncingDPI = false
+			return
+		}
+	}
+	g.syncingDPI = true
+	_ = g.dpiMode.SetCurrentIndex(0)
+	g.syncingDPI = false
+}
+
+func (g *guiState) changeCaptureMode() {
+	if g.syncingDPI || g.dpiMode == nil {
+		return
+	}
+	mode := g.captureModeValue()
+	g.config.DPI.CaptureMode = mode
+	cfg := g.config
+	if err := cfg.normalize(); err != nil {
+		g.setStatus(err.Error(), true)
+		return
+	}
+	g.config = cfg
+	if err := SaveConfig(g.configPath, cfg); err != nil {
+		g.setStatus("DPI mode save failed: "+err.Error(), true)
+		return
+	}
+	if g.serviceKnown && g.service.Exists && g.service.State != svc.Stopped {
+		g.runAction("Applying DPI mode…", func() (string, error) {
+			return "DPI mode applied", restartService()
+		}, nil)
+	} else {
+		g.setStatus("DPI mode saved", false)
+	}
 }
 
 const runRegistryKey = `Software\Microsoft\Windows\CurrentVersion\Run`
@@ -146,14 +215,25 @@ func (g *guiState) onUI(f func()) {
 	})
 }
 
-// One monitor owns the tail reader and polls SCM. Pending transitions use a
+func (g *guiState) startServiceIfNeeded() {
+	state, err := queryServiceSnapshot()
+	if err != nil || !state.Exists || state.State != svc.Stopped {
+		return
+	}
+	if err := startInstalledService(); err != nil {
+		g.onUI(func() { g.setStatus("DNS service start failed: "+err.Error(), true) })
+		return
+	}
+	g.onUI(func() { g.setStatus("DNS service starting…", false) })
+}
+
+// Poll SCM independently of log reads. Pending transitions use a
 // bounded fast interval; normal monitoring catches external service changes.
 func (g *guiState) monitor() {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
-	var nextService, nextLog, pendingSince time.Time
+	var nextService, pendingSince time.Time
 	timedOut := false
-	var lastLogError string
 	for {
 		now := time.Now()
 		if !now.Before(nextService) {
@@ -176,24 +256,63 @@ func (g *guiState) monitor() {
 			g.onUI(func() { g.applyServiceSnapshot(snapshot, err) })
 			nextService = now.Add(delay)
 		}
-		if !now.Before(nextLog) {
-			response, err := callDNSIPC(dnsIPCRequest{Op: "snapshot", Version: g.logVersion})
-			if err == nil {
-				lastLogError = ""
-				if len(response.Entries) > 0 {
-					g.onUI(func() { g.applyLogRows(response.Entries, response.Version, response.InstanceID) })
-				}
-			} else if g.service.State == svc.Running && err.Error() != lastLogError {
-				lastLogError = err.Error()
-				g.onUI(func() { g.setStatus("DNS service: "+err.Error(), true) })
-			}
-			nextLog = now.Add(400 * time.Millisecond)
-		}
 		select {
 		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// 200 ms keeps the table responsive while avoiding ten IPC snapshots per
+// second when the service is idle.
+const requestLogPollInterval = 200 * time.Millisecond
+
+func (g *guiState) monitorRequestLog() {
+	ticker := time.NewTicker(requestLogPollInterval)
+	defer ticker.Stop()
+	for {
+		g.onUI(g.pollRequestLog)
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// All cursor and UI state is owned by the UI thread. Only one read may be in
+// flight, and Clear invalidates callbacks queued before it began.
+func (g *guiState) pollRequestLog() {
+	if g.logPollPending || g.logClearing {
+		return
+	}
+	g.logPollPending = true
+	generation := g.logGeneration
+	req := dnsIPCRequest{Op: "snapshot", Version: g.logVersion, InstanceID: g.instanceID}
+	go func() {
+		response, err := callDNSIPC(req)
+		g.onUI(func() {
+			g.logPollPending = false
+			g.acceptLogResponse(response, err, generation)
+		})
+	}()
+}
+
+func (g *guiState) acceptLogResponse(response dnsIPCResponse, err error, generation uint64) {
+	if g.logClearing || generation != g.logGeneration {
+		return
+	}
+	if err != nil {
+		if g.service.State == svc.Running && err.Error() != g.lastLogError {
+			g.lastLogError = err.Error()
+			g.setStatus("DNS service: "+err.Error(), true)
+		}
+		return
+	}
+	g.lastLogError = ""
+	if !response.Unchanged {
+		g.applyLogRows(response.Entries, response.Version, response.InstanceID)
 	}
 }
 
@@ -307,6 +426,9 @@ func (g *guiState) editedConfig() (Config, error) {
 	}
 	c.Upstreams = []Upstream{PredefinedUpstream(provider)}
 	c.Interception = "windivert"
+	if g.dpiMode != nil {
+		c.DPI.CaptureMode = g.captureModeValue()
+	}
 	c.ServiceAutoStart = g.autoStart.Checked()
 	if err := c.normalize(); err != nil {
 		return Config{}, err
@@ -394,7 +516,9 @@ func (g *guiState) uninstallService() {
 	if walk.MsgBox(g.mw, "Uninstall service", "Stop and remove SonDNS?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion|walk.MsgBoxDefButton2) != walk.DlgCmdYes {
 		return
 	}
-	g.runAction("Removing…", func() (string, error) { return "Service removed", uninstallService() }, nil)
+	g.runAction("Removing…", func() (string, error) {
+		return "Installation removed; SonDNS is ready to install again", uninstallService()
+	}, nil)
 }
 
 func (g *guiState) checkResolver() {
@@ -447,7 +571,7 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 	} else if instanceID != "" && g.instanceID == "" {
 		g.instanceID = instanceID
 	}
-	if !isNewInstance && version <= g.logVersion && len(rows) > 0 {
+	if !isNewInstance && version <= g.logVersion {
 		return
 	}
 
@@ -456,13 +580,17 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 		g.logVersion = version
 		g.logModel.rows = nil
 		g.logModel.PublishRowsReset()
+		g.resetLogHighlight()
 		g.updateCopyActions()
 		return
 	}
 
-	// Full reset needed when service restarts (new instance) so stale rows are gone.
-	if isNewInstance {
+	// A full snapshot is authoritative, including after a clear from another
+	// client. Version counts mutations (Clear as well as Add), not just rows.
+	delta := int(min(version-g.logVersion, uint64(len(rows))))
+	if isNewInstance || len(rows) != min(len(g.logModel.rows)+delta, maxDNSLogRows) {
 		wasAtTop := g.requestLog.IsAtTop()
+		wasAtBottom := g.requestLog.IsAtBottom()
 		reversed := make([]DNSRequestEntry, len(rows))
 		for i, entry := range rows {
 			reversed[len(rows)-1-i] = entry
@@ -470,64 +598,89 @@ func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instance
 		g.logVersion = version
 		g.logModel.rows = reversed
 		g.logModel.PublishRowsReset()
+		g.resetLogHighlight()
 		g.updateCopyActions()
 		if wasAtTop {
 			g.requestLog.EnsureItemVisible(0)
+		} else if wasAtBottom {
+			g.requestLog.EnsureItemVisible(g.logModel.RowCount() - 1)
 		}
 		return
 	}
 
-	// Incremental update: prepend only NEW entries at the top.
-	// version increases by 1 per Add(), so delta = how many new entries exist.
-	delta := int(version - g.logVersion)
 	if delta <= 0 {
 		g.logVersion = version
 		return
 	}
-	if delta > len(rows) {
-		delta = len(rows)
-	}
 
-	// The ring buffer returns oldest→newest order; the last `delta` are the newest.
-	newEntries := rows[len(rows)-delta:]
+	combined := make([]DNSRequestEntry, len(rows))
+	for i, entry := range rows {
+		combined[len(rows)-1-i] = entry
+	}
 
 	wasAtTop := g.requestLog.IsAtTop()
-
-	// Build new display rows: newest entries reversed (newest first) prepended to existing.
-	prepend := make([]DNSRequestEntry, delta)
-	for i, e := range newEntries {
-		prepend[delta-1-i] = e
-	}
-
-	oldLen := len(g.logModel.rows)
-	combined := append(prepend, g.logModel.rows...)
-
-	// Trim tail if over capacity.
-	trimmed := 0
-	if len(combined) > maxDNSLogRows {
-		trimmed = len(combined) - maxDNSLogRows
-		combined = combined[:maxDNSLogRows]
-	}
-
 	g.logVersion = version
 	g.logModel.rows = combined
-
-	// Notify walk: rows 0..(delta-1) inserted.
-	g.logModel.PublishRowsInserted(0, delta-1)
-
-	// Notify walk: rows trimmed off the tail.
-	if trimmed > 0 && oldLen > 0 {
-		newLen := len(combined)
-		g.logModel.PublishRowsRemoved(newLen, newLen+trimmed-1)
-	}
-
-	g.updateCopyActions()
-
+	g.highlightNewLogRows(delta)
+	// Apply the final count once and preserve the reader's scroll/selection.
+	// Separate remove/insert events temporarily shrink the virtual list and
+	// Walk's normal insertion handler scrolls to the selection on every batch.
+	_ = g.requestLog.RefreshRowsAfterPrepend(delta)
 	if wasAtTop {
+		// Native ListView can restore the previous selection after a model
+		// refresh and jump the scrollbar. Reassert the live-head viewport.
 		g.requestLog.EnsureItemVisible(0)
 	}
+	g.updateCopyActions()
 }
 
+const (
+	newLogHighlightDuration = 2 * time.Second
+	maxHighlightedLogRows   = 10
+)
+
+func (g *guiState) highlightNewLogRows(count int) {
+	if g.logStyler == nil || count <= 0 {
+		return
+	}
+	if count > maxHighlightedLogRows {
+		count = maxHighlightedLogRows
+	}
+	g.logHighlightGeneration++
+	g.logStyler.rows = count
+	g.logStyler.until = time.Now().Add(newLogHighlightDuration)
+	if g.logHighlightTimer != nil {
+		g.logHighlightTimer.Stop()
+	}
+	generation := g.logHighlightGeneration
+	g.logHighlightTimer = time.AfterFunc(newLogHighlightDuration, func() {
+		g.onUI(func() {
+			if g.logHighlightGeneration != generation || g.logStyler == nil {
+				return
+			}
+			count := min(g.logStyler.rows, g.logModel.RowCount())
+			g.logStyler.rows = 0
+			g.logStyler.until = time.Time{}
+			if count > 0 {
+				g.logModel.PublishRowsChanged(0, count-1)
+			}
+		})
+	})
+}
+
+func (g *guiState) resetLogHighlight() {
+	g.logHighlightGeneration++
+	if g.logHighlightTimer != nil {
+		g.logHighlightTimer.Stop()
+		g.logHighlightTimer = nil
+	}
+	if g.logStyler == nil {
+		return
+	}
+	g.logStyler.rows = 0
+	g.logStyler.until = time.Time{}
+	_ = g.requestLog.Invalidate()
+}
 
 func (g *guiState) scrollLogToEnd() {
 	if g.logModel == nil || g.logModel.RowCount() == 0 {
@@ -537,17 +690,25 @@ func (g *guiState) scrollLogToEnd() {
 }
 
 func (g *guiState) clearRequestLog() {
+	if g.logClearing {
+		return
+	}
+	g.logClearing = true
+	g.logGeneration++
 	g.logModel.rows = nil
 	g.logModel.PublishRowsReset()
+	g.resetLogHighlight()
 	g.updateCopyActions()
-	g.logVersion = 0
 
 	g.clearButton.SetEnabled(false)
 	go func() {
 		response, err := callDNSIPC(dnsIPCRequest{Op: "clear_log"})
 		g.onUI(func() {
+			g.logClearing = false
 			g.clearButton.SetEnabled(true)
 			if err != nil {
+				g.logVersion = 0
+				g.instanceID = ""
 				if g.service.State == svc.Stopped || !g.service.Exists {
 					g.setStatus("Log cleared (service stopped)", false)
 				} else {
@@ -557,21 +718,6 @@ func (g *guiState) clearRequestLog() {
 			}
 			g.applyLogRows(nil, response.Version, response.InstanceID)
 			g.setStatus("Log cleared", false)
-		})
-	}()
-}
-
-func (g *guiState) clearDNSCache() {
-	g.clearCacheButton.SetEnabled(false)
-	go func() {
-		_, err := callDNSIPC(dnsIPCRequest{Op: "clear_cache"})
-		g.onUI(func() {
-			g.clearCacheButton.SetEnabled(true)
-			if err != nil {
-				g.setStatus("Clear cache failed: "+err.Error(), true)
-				return
-			}
-			g.setStatus("DNS cache cleared", false)
 		})
 	}()
 }
@@ -589,6 +735,10 @@ func (g *guiState) setupRequestContextMenu() {
 	g.copyIPAction.Triggered().Attach(func() { g.copyRequestField(true) })
 	_ = menu.Actions().Add(g.copyDomainAction)
 	_ = menu.Actions().Add(g.copyIPAction)
+	g.detailsAction = walk.NewAction()
+	_ = g.detailsAction.SetText("Show request details")
+	g.detailsAction.Triggered().Attach(g.showSelectedRequest)
+	_ = menu.Actions().Add(g.detailsAction)
 	g.requestLog.SetContextMenu(menu)
 	g.requestLog.CurrentIndexChanged().Attach(func() { g.updateCopyActions() })
 	g.requestLog.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
@@ -607,11 +757,28 @@ func (g *guiState) updateCopyActions() {
 	valid := idx >= 0 && idx < len(g.logModel.rows)
 	_ = g.copyDomainAction.SetEnabled(valid)
 	_ = g.copyIPAction.SetEnabled(valid && len(g.logModel.rows[idx].AnswerIPs) > 0)
+	_ = g.detailsAction.SetEnabled(valid)
+	if g.detailsButton != nil {
+		g.detailsButton.SetEnabled(valid)
+	}
 	if valid {
 		_ = g.requestLog.SetToolTipText(g.logModel.rows[idx].Error)
 	} else {
 		_ = g.requestLog.SetToolTipText("")
 	}
+}
+
+func (g *guiState) showSelectedRequest() {
+	idx := g.requestLog.CurrentIndex()
+	if idx < 0 || idx >= len(g.logModel.rows) {
+		return
+	}
+	e := g.logModel.rows[idx]
+	message := fmt.Sprintf("Domain: %s\nType: %s\nResult: %s\nProtocol: %s\nLatency: %.1f ms", strings.TrimSuffix(e.Domain, "."), e.Type, e.Result, e.Protocol, float64(e.DurationUS)/1000)
+	if e.Error != "" {
+		message += "\nError: " + e.Error
+	}
+	walk.MsgBox(g.mw, "DNS request details", message, walk.MsgBoxOK|walk.MsgBoxIconInformation)
 }
 func (g *guiState) copyRequestField(ip bool) {
 	idx := g.requestLog.CurrentIndex()
@@ -641,20 +808,31 @@ func (g *guiState) installTray() error {
 	}
 	ni, err := walk.NewNotifyIcon(g.mw)
 	if err != nil {
-		g.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
-			g.exiting = true
-			g.cancel()
-		})
 		return err
+	}
+	dispose := func() {
+		_ = ni.Dispose()
+		if g.notifyIcon == ni {
+			g.notifyIcon = nil
+		}
 	}
 	if err = ni.SetIcon(icon); err != nil {
+		dispose()
 		return err
 	}
-	_ = ni.SetToolTip("SonDNS")
+	if err = ni.SetToolTip("SonDNS"); err != nil {
+		dispose()
+		return err
+	}
 	if err = ni.SetVisible(true); err != nil {
+		dispose()
 		return err
 	}
-	showWindow := func() { g.mw.Show(); _ = g.mw.Activate() }
+	g.notifyIcon = ni
+	showWindow := func() {
+		restoreMainWindow(g.mw.Handle())
+		_ = g.mw.Activate()
+	}
 	ni.MouseDown().Attach(func(_, _ int, button walk.MouseButton) {
 		if button == walk.LeftButton {
 			showWindow()
@@ -663,21 +841,39 @@ func (g *guiState) installTray() error {
 	show := walk.NewAction()
 	_ = show.SetText("Open SonDNS")
 	show.Triggered().Attach(showWindow)
-	_ = ni.ContextMenu().Actions().Add(show)
+	if err = ni.ContextMenu().Actions().Add(show); err != nil {
+		dispose()
+		return err
+	}
 	exit := walk.NewAction()
 	_ = exit.SetText("Exit")
 	exit.Triggered().Attach(func() { g.exiting = true; _ = g.mw.Close() })
-	_ = ni.ContextMenu().Actions().Add(exit)
+	if err = ni.ContextMenu().Actions().Add(exit); err != nil {
+		dispose()
+		return err
+	}
 	g.mw.Closing().Attach(func(canceled *bool, _ walk.CloseReason) {
 		if !g.exiting {
 			*canceled = true
-			g.mw.Hide()
+			win.ShowWindow(g.mw.Handle(), win.SW_HIDE)
 			return
 		}
 		g.cancel()
-		ni.Dispose()
+		dispose()
 	})
 	return nil
+}
+
+func restoreMainWindow(hwnd win.HWND) {
+	if hwnd == 0 {
+		return
+	}
+	// Show() alone does not clear a hidden/minimized state on every Windows
+	// shell version. Restore first, then show and foreground the real HWND.
+	win.ShowWindow(hwnd, win.SW_RESTORE)
+	win.ShowWindow(hwnd, win.SW_SHOW)
+	win.BringWindowToTop(hwnd)
+	win.SetForegroundWindow(hwnd)
 }
 
 func newAppIcon() (*walk.Icon, error) {

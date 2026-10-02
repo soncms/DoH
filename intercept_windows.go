@@ -234,32 +234,34 @@ func (i *Interceptor) Shutdown() {
 }
 
 func resolveWinDivertDir() (string, error) {
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if hasWinDivertFiles(exeDir) {
-			return exeDir, nil
-		}
-	}
 	progData := os.Getenv("ProgramData")
 	if progData == "" {
 		progData = "."
 	}
 	appDir := filepath.Join(progData, "SonDNS")
-	if hasWinDivertFiles(appDir) {
-		return appDir, nil
-	}
 	if len(embeddedWinDivertDLL) > 0 && len(embeddedWinDivertSYS) > 0 {
 		if err := os.MkdirAll(appDir, 0o755); err != nil {
 			return "", err
 		}
 		dllPath := filepath.Join(appDir, "WinDivert.dll")
 		sysPath := filepath.Join(appDir, "WinDivert64.sys")
-		if err := os.WriteFile(dllPath, embeddedWinDivertDLL, 0o755); err != nil {
+		// Always refresh the pair from the embedded build. This keeps the DNS
+		// interceptor and winws2 on the same WinDivert ABI after an upgrade.
+		if err := writeEmbeddedAsset(dllPath, embeddedWinDivertDLL, 0o755); err != nil {
 			return "", fmt.Errorf("extract WinDivert.dll: %w", err)
 		}
-		if err := os.WriteFile(sysPath, embeddedWinDivertSYS, 0o644); err != nil {
+		if err := writeEmbeddedAsset(sysPath, embeddedWinDivertSYS, 0o644); err != nil {
 			return "", fmt.Errorf("extract WinDivert64.sys: %w", err)
 		}
+		return appDir, nil
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if hasWinDivertFiles(exeDir) {
+			return exeDir, nil
+		}
+	}
+	if hasWinDivertFiles(appDir) {
 		return appDir, nil
 	}
 	return "", errors.New("missing WinDivert.dll and WinDivert64.sys")
@@ -274,4 +276,3 @@ func hasWinDivertFiles(dir string) bool {
 	}
 	return true
 }
-

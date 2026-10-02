@@ -66,11 +66,21 @@ func NewResolver(c Config) (*Resolver, error) {
 		if port == "" {
 			port = "443"
 		}
-		bootstrap := append([]string(nil), upstream.Bootstrap...)
+		host, configuredBootstrap, bootstrapErr := upstreamBootstrap(upstream)
+		if bootstrapErr != nil {
+			return nil, bootstrapErr
+		}
+		bootstrap := append([]string(nil), configuredBootstrap...)
 		if len(bootstrap) == 0 {
-			bootstrap, err = resolveEndpointBootstrap(u, c.Timeout)
-			if err != nil {
-				return nil, err
+			bootstrap = bootstrapForHost(host)
+		}
+		if len(bootstrap) == 0 {
+			ips, lookupErr := resolveHostViaBootstrapDNS(c.BootstrapDNS, host, c.Timeout, nil)
+			if lookupErr != nil || len(ips) == 0 {
+				return nil, fmt.Errorf("bootstrap %s: %w", host, lookupErr)
+			}
+			for _, ip := range ips {
+				bootstrap = append(bootstrap, net.JoinHostPort(ip.String(), port))
 			}
 		}
 		transport := &http.Transport{
@@ -88,39 +98,6 @@ func NewResolver(c Config) (*Resolver, error) {
 		return nil, errors.New("no DoH upstreams configured")
 	}
 	return r, nil
-}
-
-// Resolve the endpoint before interception starts, so later DoH connections
-// never need to query the same DNS proxy to find their own upstream hostname.
-func resolveEndpointBootstrap(endpoint *url.URL, timeout time.Duration) ([]string, error) {
-	host := endpoint.Hostname()
-	port := endpoint.Port()
-	if port == "" {
-		port = "443"
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return []string{net.JoinHostPort(ip.String(), port)}, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve DoH hostname %q before starting DNS interception: %w", host, err)
-	}
-	var ipv4, ipv6 []string
-	for _, address := range addresses {
-		value := net.JoinHostPort(address.IP.String(), port)
-		if address.IP.To4() != nil {
-			ipv4 = append(ipv4, value)
-		} else {
-			ipv6 = append(ipv6, value)
-		}
-	}
-	bootstrap := append(ipv4, ipv6...)
-	if len(bootstrap) == 0 {
-		return nil, fmt.Errorf("DoH hostname %q has no IP addresses", host)
-	}
-	return bootstrap, nil
 }
 
 func bootstrapDialer(host, port string, addresses []string, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
@@ -152,12 +129,14 @@ func (r *Resolver) Resolve(ctx context.Context, wire []byte) ([]byte, error) {
 			return nil, fmt.Errorf("invalid DNS query: %w", err)
 		}
 		response, err := r.engine.ResolveMsg(ctx, request)
-		if err != nil {
-			return nil, err
-		}
 		if response == nil {
+			if err != nil {
+				return nil, err
+			}
 			return nil, errors.New("empty DNS response")
 		}
+		// The engine also returns a valid SERVFAIL on transport failure. Deliver
+		// it to the client instead of silently dropping the intercepted query.
 		return response.Pack()
 	}
 	if r.local != nil {

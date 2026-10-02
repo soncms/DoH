@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build windows
 // +build windows
 
 package walk
@@ -708,6 +709,56 @@ func (tv *TableView) redrawItems() {
 	win.SendMessage(tv.hwndNormalLV, win.LVM_REDRAWITEMS, first, last)
 }
 
+// RefreshRowsAfterPrepend refreshes an unsorted, single-selection model after
+// new rows were prepended and optional old rows were dropped from its tail.
+// The model must already contain its final rows; do not also publish insertion
+// or removal events. Readers at the top follow new rows, while other readers
+// keep their top item and selection until those items leave the model.
+func (tv *TableView) RefreshRowsAfterPrepend(prepended int) error {
+	if tv.model == nil || prepended <= 0 || prepended > tv.model.RowCount() {
+		return newError("invalid prepended row count")
+	}
+	count := tv.model.RowCount()
+	top := int(win.SendMessage(tv.hwndNormalLV, win.LVM_GETTOPINDEX, 0, 0))
+	current := tv.currentIndex
+	const lvmGetItemCount = win.LVM_FIRST + 4
+	oldCount := int(win.SendMessage(tv.hwndNormalLV, lvmGetItemCount, 0, 0))
+	if count != oldCount {
+		if err := tv.setItemCount(); err != nil {
+			return err
+		}
+	}
+	if current >= 0 {
+		current += prepended
+		if current >= count {
+			current = -1
+		}
+		if err := tv.setCurrentIndex(current, false); err != nil {
+			return err
+		}
+	}
+	if top > 0 {
+		// Scroll by row height to retain the same top item, without first
+		// scrolling to the selection (which may be outside the viewport).
+		target := top + prepended
+		if target >= count {
+			target = count - 1
+		}
+		var bounds win.RECT
+		if win.SendMessage(tv.hwndNormalLV, win.LVM_GETITEMRECT, 0, uintptr(unsafe.Pointer(&bounds))) != 0 {
+			now := int(win.SendMessage(tv.hwndNormalLV, win.LVM_GETTOPINDEX, 0, 0))
+			dy := (target - now) * int(bounds.Bottom-bounds.Top)
+			// LVN_BEGINSCROLL synchronizes the frozen view automatically.
+			win.SendMessage(tv.hwndNormalLV, win.LVM_SCROLL, 0, uintptr(dy))
+		}
+	}
+	tv.redrawItems()
+	if count != oldCount {
+		tv.itemCountChangedPublisher.Publish()
+	}
+	return nil
+}
+
 // UpdateItem ensures the item at index will be redrawn.
 //
 // If the model supports sorting, it will be resorted.
@@ -1198,6 +1249,10 @@ func (tv *TableView) CurrentIndex() int {
 //
 // Call this with a value of -1 to have no current item.
 func (tv *TableView) SetCurrentIndex(index int) error {
+	return tv.setCurrentIndex(index, true)
+}
+
+func (tv *TableView) setCurrentIndex(index int, ensureVisible bool) error {
 	if tv.inSetCurrentIndex {
 		return nil
 	}
@@ -1230,22 +1285,23 @@ func (tv *TableView) SetCurrentIndex(index int) error {
 		return newError("SendMessage(LVM_SETITEMSTATE)")
 	}
 
+	if index > -1 && ensureVisible {
+		if win.FALSE == win.SendMessage(tv.hwndFrozenLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
+			return newError("SendMessage(LVM_ENSUREVISIBLE)")
+		}
+		// Windows bug? Sometimes a second LVM_ENSUREVISIBLE is required.
+		if win.FALSE == win.SendMessage(tv.hwndFrozenLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
+			return newError("SendMessage(LVM_ENSUREVISIBLE)")
+		}
+		if win.FALSE == win.SendMessage(tv.hwndNormalLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
+			return newError("SendMessage(LVM_ENSUREVISIBLE)")
+		}
+		// Windows bug? Sometimes a second LVM_ENSUREVISIBLE is required.
+		if win.FALSE == win.SendMessage(tv.hwndNormalLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
+			return newError("SendMessage(LVM_ENSUREVISIBLE)")
+		}
+	}
 	if index > -1 {
-		if win.FALSE == win.SendMessage(tv.hwndFrozenLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
-			return newError("SendMessage(LVM_ENSUREVISIBLE)")
-		}
-		// Windows bug? Sometimes a second LVM_ENSUREVISIBLE is required.
-		if win.FALSE == win.SendMessage(tv.hwndFrozenLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
-			return newError("SendMessage(LVM_ENSUREVISIBLE)")
-		}
-		if win.FALSE == win.SendMessage(tv.hwndNormalLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
-			return newError("SendMessage(LVM_ENSUREVISIBLE)")
-		}
-		// Windows bug? Sometimes a second LVM_ENSUREVISIBLE is required.
-		if win.FALSE == win.SendMessage(tv.hwndNormalLV, win.LVM_ENSUREVISIBLE, uintptr(index), uintptr(0)) {
-			return newError("SendMessage(LVM_ENSUREVISIBLE)")
-		}
-
 		if ip, ok := tv.providedModel.(IDProvider); ok && tv.restoringCurrentItemOnReset {
 			if id := ip.ID(index); id != tv.currentItemID {
 				tv.currentItemID = id

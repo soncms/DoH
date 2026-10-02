@@ -8,9 +8,11 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
   go vet ./...
   if ($LASTEXITCODE -ne 0) { throw "Vet failed" }
-  go build -trimpath -ldflags "-s -w -H=windowsgui" -o SonDNS.exe .
+  $dist = Join-Path $workspace "dist"
+  New-Item -ItemType Directory -Force -Path $dist | Out-Null
+  go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $dist "SonDNS.exe") .
   if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
-  Get-FileHash -LiteralPath (Join-Path $workspace "SonDNS.exe") -Algorithm SHA256
+  Get-FileHash -LiteralPath (Join-Path $dist "SonDNS.exe") -Algorithm SHA256
 } finally {
   Pop-Location
 }

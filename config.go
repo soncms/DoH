@@ -17,13 +17,27 @@ import (
 type Config struct {
 	Listen           string        `json:"listen"`
 	Interception     string        `json:"interception"`
+	DPI              DPIConfig     `json:"dpi_bypass,omitempty"`
 	Upstreams        []Upstream    `json:"upstreams"`
 	BootstrapDNS     []string      `json:"bootstrap_dns,omitempty"`
 	Timeout          time.Duration `json:"timeout"`
 	LogFile          string        `json:"log_file"`
-	CacheEnabled     bool          `json:"cache_enabled"`
-	CacheSize        int           `json:"cache_size_bytes"`
 	ServiceAutoStart bool          `json:"service_auto_start"`
+}
+
+// DPIConfig controls the embedded zapret2/winws2 compatibility backend. The
+// backend is shipped as data inside SonDNS.exe and extracted on demand; an
+// unavailable or failed backend never prevents DNS interception from starting.
+type DPIConfig struct {
+	Enabled     bool     `json:"enabled"`
+	Backend     string   `json:"backend,omitempty"`
+	CaptureMode string   `json:"capture_mode,omitempty"`
+	Executable  string   `json:"executable,omitempty"`
+	Arguments   []string `json:"arguments,omitempty"`
+	Targets     []string `json:"targets,omitempty"`
+	Exclude     []string `json:"exclude,omitempty"`
+	FailOpen    bool     `json:"fail_open"`
+	AutoRestart bool     `json:"auto_restart"`
 }
 
 type Upstream struct {
@@ -38,7 +52,7 @@ const (
 	ProviderSonCMS  = "SonCMS"
 	ProviderNextDNS = "NextDNS"
 
-	URLSonCMS  = "https://dns.soncms.net/dns-query"
+	URLSonCMS  = "https://dns.soncms.net/dns-query/sondns"
 	URLNextDNS = "https://dns.nextdns.io/2e2e3c"
 )
 
@@ -138,10 +152,15 @@ func DefaultConfig() Config {
 	return Config{
 		Listen:       "127.0.0.1:5300",
 		Interception: "windivert",
-		Timeout:      5 * time.Second,
-		LogFile:      defaultLogPath(),
-		CacheEnabled: true,
-		CacheSize:    64 << 20,
+		DPI: DPIConfig{
+			Enabled:     true,
+			Backend:     "embedded-zapret2",
+			CaptureMode: "default",
+			FailOpen:    true,
+			AutoRestart: true,
+		},
+		Timeout: 5 * time.Second,
+		LogFile: defaultLogPath(),
 		Upstreams: []Upstream{
 			PredefinedUpstream(ProviderSonCMS),
 		},
@@ -166,12 +185,6 @@ func (c *Config) normalize() error {
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = 5 * time.Second
-	}
-	if c.CacheSize < 0 {
-		return errors.New("cache_size_bytes cannot be negative")
-	}
-	if c.CacheSize == 0 {
-		c.CacheSize = 64 << 20
 	}
 	if strings.TrimSpace(c.LogFile) == "" {
 		c.LogFile = defaultLogPath()
@@ -219,11 +232,36 @@ func (c *Config) normalize() error {
 		}
 	}
 	c.Interception = strings.ToLower(strings.TrimSpace(c.Interception))
-	if c.Interception == "" || c.Interception == "off" {
+	if c.Interception == "" {
 		c.Interception = "windivert"
 	}
 	if c.Interception != "windivert" {
 		return fmt.Errorf("interception must be windivert")
+	}
+	c.DPI.Backend = strings.ToLower(strings.TrimSpace(c.DPI.Backend))
+	if c.DPI.Backend == "" {
+		c.DPI.Backend = "embedded-zapret2"
+	}
+	if c.DPI.Backend != "embedded-zapret2" && c.DPI.Backend != "external" {
+		return fmt.Errorf("dpi_bypass.backend must be embedded-zapret2 or external")
+	}
+	c.DPI.CaptureMode = strings.ToLower(strings.TrimSpace(c.DPI.CaptureMode))
+	if c.DPI.CaptureMode == "" {
+		c.DPI.CaptureMode = "default"
+	}
+	if c.DPI.CaptureMode != "default" && c.DPI.CaptureMode != "tcp" && c.DPI.CaptureMode != "tcp+udp" {
+		return fmt.Errorf("dpi_bypass.capture_mode must be default, tcp, or tcp+udp")
+	}
+	if !c.DPI.FailOpen {
+		// Fail-open is mandatory for the first integration: a helper failure
+		// must not turn into a system-wide connectivity outage.
+		c.DPI.FailOpen = true
+	}
+	for i, target := range c.DPI.Targets {
+		c.DPI.Targets[i] = strings.TrimSpace(target)
+	}
+	for i, target := range c.DPI.Exclude {
+		c.DPI.Exclude[i] = strings.TrimSpace(target)
 	}
 	return nil
 }

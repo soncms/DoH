@@ -7,7 +7,6 @@ import "errors"
 type dnsIPCServer struct{}
 
 type dnsEngineProxy interface {
-	ClearCache()
 	SetUpstreams([]Upstream) error
 }
 
@@ -23,10 +22,12 @@ type dnsIPCRequest struct {
 	Upstreams []Upstream `json:"upstreams,omitempty"`
 }
 type dnsIPCResponse struct {
-	OK      bool              `json:"ok"`
-	Version uint64            `json:"version,omitempty"`
-	Entries []DNSRequestEntry `json:"entries,omitempty"`
-	Error   string            `json:"error,omitempty"`
+	OK              bool              `json:"ok"`
+	SchemaVersion   int               `json:"schema_version,omitempty"`
+	Version         uint64            `json:"version,omitempty"`
+	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
+	Entries         []DNSRequestEntry `json:"entries,omitempty"`
+	Error           string            `json:"error,omitempty"`
 }
 
 func callDNSIPC(dnsIPCRequest) (dnsIPCResponse, error) {

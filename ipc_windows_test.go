@@ -3,36 +3,35 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-type testCacheProxy struct {
-	cleared   bool
+type testEngineProxy struct {
 	upstreams []Upstream
 }
 
-func (p *testCacheProxy) ClearCache() { p.cleared = true }
-func (p *testCacheProxy) SetUpstreams(items []Upstream) error {
+func (p *testEngineProxy) SetUpstreams(items []Upstream) error {
 	p.upstreams = items
 	return nil
 }
 
 func TestDNSIPCServerRoundTrip(t *testing.T) {
-	if _, err := callDNSIPC(dnsIPCRequest{Op: "snapshot"}); err == nil {
-		t.Skip("SonDNS service already owns the IPC pipe")
-	}
 	ring := NewDNSRequestRing()
-	proxy := &testCacheProxy{}
+	proxy := &testEngineProxy{}
 	server := newDNSIPCServer(ring, proxy)
+	server.pipeName = fmt.Sprintf(`\\.\pipe\SonDNS-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	call := func(req dnsIPCRequest) (dnsIPCResponse, error) { return callDNSIPCAt(server.pipeName, req) }
 	server.start()
 	defer server.close()
 	ring.Add(DNSRequestEntry{Domain: "example.com.", Type: "A", Result: "NOERROR", AnswerIPs: []string{"192.0.2.1"}})
 	var response dnsIPCResponse
 	var err error
 	for i := 0; i < 20; i++ {
-		response, err = callDNSIPC(dnsIPCRequest{Op: "snapshot"})
+		response, err = call(dnsIPCRequest{Op: "snapshot"})
 		if err == nil {
 			break
 		}
@@ -44,13 +43,10 @@ func TestDNSIPCServerRoundTrip(t *testing.T) {
 	if response.InstanceID == "" {
 		t.Fatal("expected instance id in response")
 	}
-	if _, err = callDNSIPC(dnsIPCRequest{Op: "clear_cache"}); err != nil || !proxy.cleared {
-		t.Fatalf("cache clear failed: %v", err)
-	}
-	if _, err = callDNSIPC(dnsIPCRequest{Op: "set_upstream", Upstreams: []Upstream{PredefinedUpstream(ProviderNextDNS)}}); err != nil || len(proxy.upstreams) != 1 || proxy.upstreams[0].URL != URLNextDNS {
+	if _, err = call(dnsIPCRequest{Op: "set_upstream", Upstreams: []Upstream{PredefinedUpstream(ProviderNextDNS)}}); err != nil || len(proxy.upstreams) != 1 || proxy.upstreams[0].URL != URLNextDNS {
 		t.Fatalf("set_upstream failed: %v, proxy upstreams: %+v", err, proxy.upstreams)
 	}
-	response, err = callDNSIPC(dnsIPCRequest{Op: "clear_log"})
+	response, err = call(dnsIPCRequest{Op: "clear_log"})
 	if err != nil || len(response.Entries) != 0 {
 		t.Fatalf("log clear failed: %+v %v", response, err)
 	}
@@ -76,6 +72,9 @@ func TestLiveServiceIPC(t *testing.T) {
 }
 
 func TestLiveServiceHotSwap(t *testing.T) {
+	if os.Getenv("SONDNS_HOTSWAP_TEST") != "1" {
+		t.Skip("set SONDNS_HOTSWAP_TEST=1 to explicitly change the live service provider")
+	}
 	resp, err := callDNSIPC(dnsIPCRequest{
 		Op:        "set_upstream",
 		Upstreams: []Upstream{PredefinedUpstream(ProviderNextDNS)},
@@ -98,18 +97,22 @@ func TestLiveServiceHotSwap(t *testing.T) {
 
 func TestDNSIPCSnapshotVersionSkip(t *testing.T) {
 	ring := NewDNSRequestRing()
-	proxy := &testCacheProxy{}
+	proxy := &testEngineProxy{}
 	server := newDNSIPCServer(ring, proxy)
 
-	// Direct test of server logic
 	ring.Add(DNSRequestEntry{Domain: "example.org", Type: "A", Result: "NOERROR"})
 	v := ring.Version()
-
-	// When matching version is passed, entries should be nil
-	curVer := ring.Version()
-	if curVer != v {
-		t.Fatalf("expected version %d, got %d", v, curVer)
+	resp := server.respond(dnsIPCRequest{Op: "snapshot", Version: v, InstanceID: server.instanceID})
+	if !resp.Unchanged || len(resp.Entries) != 0 || resp.Version != v {
+		t.Fatalf("unchanged snapshot: %+v", resp)
 	}
-	_ = server
+	resp = server.respond(dnsIPCRequest{Op: "snapshot", Version: v, InstanceID: "previous-service"})
+	if resp.Unchanged || len(resp.Entries) != 1 {
+		t.Fatalf("version collision after restart suppressed rows: %+v", resp)
+	}
+	ring.Clear()
+	resp = server.respond(dnsIPCRequest{Op: "snapshot", Version: v, InstanceID: server.instanceID})
+	if resp.Unchanged || len(resp.Entries) != 0 || resp.Version <= v {
+		t.Fatalf("clear must return a changed, empty snapshot: %+v", resp)
+	}
 }
-

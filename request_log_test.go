@@ -47,4 +47,59 @@ func TestDNSRequestRingClonesAnswerIPs(t *testing.T) {
 	if rows[0].AnswerIPs[0] != "192.0.2.1" {
 		t.Fatal("ring retained caller slice")
 	}
+	rows[0].AnswerIPs[0] = "mutated snapshot"
+	rows, _ = r.Snapshot()
+	if rows[0].AnswerIPs[0] != "192.0.2.1" {
+		t.Fatal("snapshot modified the ring")
+	}
+}
+
+func TestDNSRequestRingWrapThenClear(t *testing.T) {
+	r := NewDNSRequestRing()
+	for i := 0; i < 3*maxDNSLogRows+7; i++ {
+		r.Add(DNSRequestEntry{Domain: fmt.Sprint(i)})
+	}
+	r.Clear()
+	r.Add(DNSRequestEntry{Domain: "fresh"})
+	rows, _ := r.Snapshot()
+	if len(rows) != 1 || rows[0].Domain != "fresh" {
+		t.Fatalf("clear failed after wrap: %+v", rows)
+	}
+}
+
+func BenchmarkDNSRequestRingAddAtCapacity(b *testing.B) {
+	r := NewDNSRequestRing()
+	entry := DNSRequestEntry{Time: time.Unix(1, 0), Domain: "example.com", Type: "A", Result: "NOERROR"}
+	for i := 0; i < maxDNSLogRows; i++ {
+		r.Add(entry)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Add(entry)
+	}
+}
+
+func TestDNSRequestRingIDsOverwriteStatsAndDeepCloneAttempts(t *testing.T) {
+	r := NewDNSRequestRing()
+	attempts := []DNSAttempt{{Number: 1, Upstreams: []string{"https://dns.example/dns-query"}}}
+	for i := 0; i < maxDNSLogRows+3; i++ {
+		r.Add(DNSRequestEntry{Domain: fmt.Sprint(i), Attempts: attempts})
+	}
+	attempts[0].Upstreams[0] = "mutated"
+	rows, version, overwritten := r.SnapshotStats()
+	if len(rows) != maxDNSLogRows || version != maxDNSLogRows+3 || overwritten != 3 {
+		t.Fatalf("rows=%d version=%d overwritten=%d", len(rows), version, overwritten)
+	}
+	if rows[0].ID != 4 || rows[len(rows)-1].ID != maxDNSLogRows+3 {
+		t.Fatalf("unexpected retained ID range: %d..%d", rows[0].ID, rows[len(rows)-1].ID)
+	}
+	if rows[0].Attempts[0].Upstreams[0] == "mutated" {
+		t.Fatal("ring retained nested caller slice")
+	}
+	rows[0].Attempts[0].Upstreams[0] = "snapshot mutation"
+	again, _, _ := r.SnapshotStats()
+	if again[0].Attempts[0].Upstreams[0] == "snapshot mutation" {
+		t.Fatal("snapshot exposed nested ring storage")
+	}
 }

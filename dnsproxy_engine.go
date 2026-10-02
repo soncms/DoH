@@ -35,18 +35,11 @@ func prepareUpstreamsConfig(items []Upstream, bootstrapDNS []string, timeout tim
 	bootstrap := bootstrapMap{}
 	for _, item := range items {
 		lines = append(lines, item.URL)
-		host := strings.ToLower(strings.TrimSuffix(hostnameFromURL(item.URL), "."))
-		addresses := append([]string(nil), item.Bootstrap...)
-		if strings.HasPrefix(item.URL, "sdns://") {
-			stamp, stampErr := dnsstamps.NewServerStampFromString(item.URL)
-			if stampErr != nil {
-				return nil, stampErr
-			}
-			host = strings.ToLower(strings.TrimSuffix(stamp.ProviderName, "."))
-			if len(addresses) == 0 && stamp.ServerAddrStr != "" {
-				addresses = append(addresses, stamp.ServerAddrStr)
-			}
+		host, addresses, err := upstreamBootstrap(item)
+		if err != nil {
+			return nil, err
 		}
+		host = strings.ToLower(strings.TrimSuffix(host, "."))
 		for _, value := range addresses {
 			addr, parseErr := netip.ParseAddrPort(value)
 			ip := addr.Addr()
@@ -84,12 +77,6 @@ func prepareUpstreamsConfig(items []Upstream, bootstrapDNS []string, timeout tim
 	return dnsproxy.ParseUpstreamsConfig(lines, options)
 }
 
-func (e *DNSProxyEngine) ClearCache() {
-	if e != nil && e.proxy != nil {
-		e.proxy.ClearCache()
-	}
-}
-
 func (e *DNSProxyEngine) SetUpstreams(items []Upstream) error {
 	if e == nil || e.proxy == nil || e.upstreams == nil {
 		return errors.New("engine not initialized")
@@ -103,25 +90,23 @@ func (e *DNSProxyEngine) SetUpstreams(items []Upstream) error {
 	}
 	newConf, err := prepareUpstreamsConfig(items, e.bootstrapDNS, timeout, e.logger)
 	if err != nil {
+		if newConf != nil {
+			_ = newConf.Close()
+		}
 		return err
 	}
-	e.mu.Lock()
-	oldUpstreams := e.upstreams.Upstreams
-	e.upstreams.Upstreams = newConf.Upstreams
-	e.upstreams.DomainReservedUpstreams = newConf.DomainReservedUpstreams
-	e.upstreams.SpecifiedDomainUpstreams = newConf.SpecifiedDomainUpstreams
-	e.upstreams.SubdomainExclusions = newConf.SubdomainExclusions
-	e.mu.Unlock()
-
-	e.proxy.ClearCache()
-
-	go func() {
-		time.Sleep(1 * time.Second)
-		for _, u := range oldUpstreams {
-			_ = u.Close()
-		}
-	}()
+	e.replaceUpstreams(newConf)
 	return nil
+}
+
+func (e *DNSProxyEngine) replaceUpstreams(newConf *dnsproxy.UpstreamConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// Request handlers share this lock: a swap waits for active queries before
+	// replacing the configuration or closing their transports.
+	oldConf := *e.upstreams
+	*e.upstreams = *newConf
+	_ = oldConf.Close()
 }
 
 func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver, error) {
@@ -148,35 +133,29 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 	}
 	logWriter := slogWriter{logger: logger}
 	ring := NewDNSRequestRing()
+	engine := &DNSProxyEngine{
+		logger: logger, requests: ring, upstreams: upstreams,
+		timeout: c.Timeout, bootstrapDNS: c.BootstrapDNS,
+	}
 	engineProxy, err := dnsproxy.New(&dnsproxy.Config{
-		Logger:          slog.New(slog.NewTextHandler(logWriter, nil)),
-		UpstreamConfig:  upstreams,
-		UpstreamMode:    dnsproxy.UpstreamModeParallel,
-		UDPListenAddr:   []*net.UDPAddr{udpAddr},
-		TCPListenAddr:   []*net.TCPAddr{tcpAddr},
-		CacheEnabled:    c.CacheEnabled,
-		CacheSizeBytes:  c.CacheSize,
-		CacheMinTTL:     60,
-		CacheMaxTTL:     86400,
-		CacheOptimistic: true,
+		Logger:         slog.New(slog.NewTextHandler(logWriter, nil)),
+		UpstreamConfig: upstreams,
+		UpstreamMode:   dnsproxy.UpstreamModeParallel,
+		UDPListenAddr:  []*net.UDPAddr{udpAddr},
+		TCPListenAddr:  []*net.TCPAddr{tcpAddr},
+		// Every client request must reach upstream, including repeated queries.
+		CacheEnabled:    false,
 		DNSSECEnabled:   anyDNSSEC(c),
 		MaxGoroutines:   2048,
 		UDPBufferSize:   1 << 20,
-		PendingRequests: &dnsproxy.PendingRequestsConfig{Enabled: true},
-		RequestHandler:  requestLogHandler{ring: ring},
+		PendingRequests: &dnsproxy.PendingRequestsConfig{Enabled: false},
+		RequestHandler:  requestLogHandler{ring: ring, configMu: &engine.mu},
 	})
 	if err != nil {
 		_ = upstreams.Close()
 		return nil, nil, fmt.Errorf("create DNS proxy: %w", err)
 	}
-	engine := &DNSProxyEngine{
-		logger:       logger,
-		proxy:        engineProxy,
-		requests:     ring,
-		upstreams:    upstreams,
-		timeout:      c.Timeout,
-		bootstrapDNS: c.BootstrapDNS,
-	}
+	engine.proxy = engineProxy
 	return engine, &Resolver{engine: engine, local: &dns.Client{Net: "udp", Timeout: c.Timeout}, localAddr: c.Listen, timeout: c.Timeout, requests: ring}, nil
 }
 
@@ -184,23 +163,40 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 	if e == nil || e.proxy == nil {
 		return nil, errors.New("engine not initialized")
 	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	started := time.Now()
+	// Keep the original query available so cancellation before the first
+	// attempt still produces exactly one finalized client-request row.
+	lastContext := &dnsproxy.DNSContext{Req: req.Copy(), Proto: dnsproxy.ProtoUDP}
 	const maxAttempts = 2
 	var lastErr error
+	attempts := make([]DNSAttempt, 0, maxAttempts)
+	defer func() {
+		(requestLogHandler{ring: e.requests}).recordWithAttempts(lastContext, lastErr, time.Since(started), attempts)
+	}()
 	perAttemptTimeout := 2 * time.Second
 	if e.timeout > 0 && e.timeout < perAttemptTimeout {
 		perAttemptTimeout = e.timeout
 	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
 		// Copy the request because dnsproxy mutates the message in place
 		// (EDNS0 flags, ID handling) and the same query is reused on retry.
 		dctx := &dnsproxy.DNSContext{
 			Req:   req.Copy(),
 			Proto: dnsproxy.ProtoUDP,
 		}
-		handler := requestLogHandler{ring: e.requests}
+		lastContext = dctx
+		handler := requestLogHandler{}
 		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		attemptStarted := time.Now()
 		lastErr = handler.ServeDNS(attemptCtx, e.proxy, dctx)
 		cancel()
+		attempts = append(attempts, attemptFromContext(len(attempts)+1, dctx, lastErr, time.Since(attemptStarted)))
 		// ServeDNS always fills dctx.Res, even with a synthetic SERVFAIL when
 		// every upstream fails, so a non-nil response does not mean success.
 		// Retry only when the upstream exchange itself returned an error.
@@ -216,10 +212,15 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 }
 
 type requestLogHandler struct {
-	ring *DNSRequestRing
+	ring     *DNSRequestRing
+	configMu *sync.RWMutex
 }
 
 func (h requestLogHandler) ServeDNS(ctx context.Context, p *dnsproxy.Proxy, dctx *dnsproxy.DNSContext) (err error) {
+	if h.configMu != nil {
+		h.configMu.RLock()
+		defer h.configMu.RUnlock()
+	}
 	started := time.Now()
 	defer func() { h.record(dctx, err, time.Since(started)) }()
 	err = (dnsproxy.DefaultHandler{}).ServeDNS(ctx, p, dctx)
@@ -227,6 +228,10 @@ func (h requestLogHandler) ServeDNS(ctx context.Context, p *dnsproxy.Proxy, dctx
 }
 
 func (h requestLogHandler) record(dctx *dnsproxy.DNSContext, err error, elapsed time.Duration) {
+	h.recordWithAttempts(dctx, err, elapsed, nil)
+}
+
+func (h requestLogHandler) recordWithAttempts(dctx *dnsproxy.DNSContext, err error, elapsed time.Duration, attempts []DNSAttempt) {
 	if h.ring == nil || dctx == nil || dctx.Req == nil || len(dctx.Req.Question) == 0 {
 		return
 	}
@@ -237,14 +242,97 @@ func (h requestLogHandler) record(dctx *dnsproxy.DNSContext, err error, elapsed 
 		qtype = fmt.Sprintf("TYPE%d", question.Qtype)
 	}
 	domain := strings.TrimSuffix(question.Name, ".")
-	entry := DNSRequestEntry{Domain: domain, Type: qtype, Result: result, LatencyMS: elapsed.Milliseconds(), AnswerIPs: answerIPs(dctx.Res)}
+	stats := dctx.QueryStatistics()
+	completed := time.Now()
+	entry := DNSRequestEntry{
+		Time: completed.Add(-elapsed), CompletedTime: completed,
+		Domain: domain, Type: qtype, Protocol: protocolName(dctx.Proto),
+		Result: result, RCode: responseCode(dctx.Res),
+		LatencyMS: elapsed.Milliseconds(), DurationUS: elapsed.Microseconds(),
+		AnswerIPs: answerIPs(dctx.Res), Attempts: append([]DNSAttempt(nil), attempts...),
+	}
+	entry.AttemptCount = len(entry.Attempts)
+	if entry.AttemptCount == 0 && stats != nil {
+		entry.AttemptCount = len(stats.Main()) + len(stats.Fallback())
+	}
+	if stats != nil {
+		for _, item := range append(stats.Main(), stats.Fallback()...) {
+			if item == nil {
+				continue
+			}
+			if item.Address != "" && entry.Upstream == "" {
+				entry.Upstream = item.Address
+			}
+		}
+	}
+	if len(entry.Attempts) == 0 {
+		entry.Attempts = []DNSAttempt{attemptFromStats(1, stats, err, elapsed)}
+		entry.AttemptCount = 1
+	}
 	if err != nil {
 		entry.Error = err.Error()
 	}
 	if entry.Error == "" {
-		entry.Error = statsErrorSummary(dctx.QueryStatistics())
+		entry.Error = statsErrorSummary(stats)
 	}
 	h.ring.Add(entry)
+}
+
+func attemptFromContext(number int, dctx *dnsproxy.DNSContext, err error, elapsed time.Duration) DNSAttempt {
+	attempt := DNSAttempt{Number: number, DurationUS: elapsed.Microseconds()}
+	if dctx == nil {
+		if err != nil {
+			attempt.Error = err.Error()
+		}
+		return attempt
+	}
+	stats := dctx.QueryStatistics()
+	if stats != nil {
+		for _, item := range append(stats.Main(), stats.Fallback()...) {
+			if item != nil && item.Address != "" {
+				attempt.Upstreams = append(attempt.Upstreams, item.Address)
+			}
+			if item != nil && item.Error != nil && attempt.Error == "" {
+				attempt.Error = item.Error.Error()
+			}
+		}
+	}
+	if err != nil {
+		attempt.Error = err.Error()
+	}
+	return attempt
+}
+
+func attemptFromStats(number int, stats *dnsproxy.QueryStatistics, err error, elapsed time.Duration) DNSAttempt {
+	attempt := DNSAttempt{Number: number, DurationUS: elapsed.Microseconds()}
+	if stats != nil {
+		for _, item := range append(stats.Main(), stats.Fallback()...) {
+			if item == nil {
+				continue
+			}
+			if item.Address != "" {
+				attempt.Upstreams = append(attempt.Upstreams, item.Address)
+			}
+			if item.Error != nil && attempt.Error == "" {
+				attempt.Error = item.Error.Error()
+			}
+		}
+	}
+	if err != nil {
+		attempt.Error = err.Error()
+	}
+	return attempt
+}
+
+func responseCode(response *dns.Msg) string {
+	if response == nil {
+		return ""
+	}
+	return dns.RcodeToString[response.Rcode]
+}
+
+func protocolName(proto any) string {
+	return fmt.Sprint(proto)
 }
 
 func requestResult(err error, response *dns.Msg, stats *dnsproxy.QueryStatistics) string {
@@ -386,6 +474,21 @@ func (r bootstrapMap) LookupNetIP(ctx context.Context, network, host string) ([]
 	}
 	return nil, fmt.Errorf("no bootstrap IP prepared for %s", host)
 }
+func upstreamBootstrap(item Upstream) (string, []string, error) {
+	if strings.HasPrefix(strings.ToLower(item.URL), "sdns://") {
+		stamp, err := dnsstamps.NewServerStampFromString(item.URL)
+		if err != nil {
+			return "", nil, err
+		}
+		addresses := append([]string(nil), item.Bootstrap...)
+		if len(addresses) == 0 && stamp.ServerAddrStr != "" {
+			addresses = append(addresses, stamp.ServerAddrStr)
+		}
+		return stamp.ProviderName, addresses, nil
+	}
+	return hostnameFromURL(item.URL), append([]string(nil), item.Bootstrap...), nil
+}
+
 func hostnameFromURL(raw string) string {
 	start := strings.Index(raw, "://")
 	if start < 0 {
