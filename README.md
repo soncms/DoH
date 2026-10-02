@@ -42,6 +42,8 @@ place so the service can be installed again immediately.
 GUI đọc cấu hình và thử khởi động service đã cài nếu đang dừng khi mở. Nếu chưa cài, dùng nút Install & start với quyền Administrator. Thay đổi DNS Server (SonCMS / NextDNS) được hot-swap qua IPC không cần restart. SonCMS dùng endpoint https://dns.soncms.net/dns-query/sondns. Start with Windows điều khiển autostart; WinDivert luôn bật khi service chạy.
 SonDNS dùng mutex riêng cho GUI và runtime: mở GUI lần hai sẽ tự kích hoạt cửa sổ hiện tại lên, còn một runtime thứ hai bị từ chối trước khi bind cổng DNS. Service Windows vốn đã được SCM giới hạn một instance.
 
+Tray menu có `Open Connections dashboard`. Dashboard dùng WebView2 Evergreen và hiển thị process, PID, remote IP/port, protocol, trạng thái và lịch sử connection trong SQLite local. Nút Block app/Allow app quản lý outbound Windows Firewall rules trong group SonDNS. Domain được điền từ DNS correlation khi có answer tương ứng; kết nối mã hóa không cung cấp hostname sẽ vẫn hiện IP/port.
+
 Các upstream hỗ trợ `https://`, `tls://`, `quic://`, `sdns://`. SonDNS không cache DNS local: mọi request đều được gửi tới upstream, kể cả query trùng nhau. Các trường cache trong cấu hình cũ được bỏ qua.
 
 ## Bypass DNS qua WinDivert
