@@ -57,7 +57,7 @@ func runGUI() error { return runGUIWithConfigAndTray(defaultConfigPath(), false)
 
 func runGUIWithConfig(path string) error { return runGUIWithConfigAndTray(path, false) }
 
-func runLegacyGUIWithConfigAndTray(path string, startInTray bool) error {
+func runGUIWithConfigAndTray(path string, startInTray bool) error {
 	instance, acquired, err := acquireProcessMutex("Local\\SonDNS.GUI")
 	if err != nil {
 		return err
