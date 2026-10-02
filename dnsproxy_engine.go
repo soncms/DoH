@@ -26,6 +26,9 @@ type DNSProxyEngine struct {
 	ipc          *dnsIPCServer
 	timeout      time.Duration
 	bootstrapDNS []string
+	connections  *ConnectionStore
+	monitor      *ConnectionMonitor
+	firewall     FirewallManager
 	mu           sync.RWMutex
 	started      bool
 }
@@ -156,6 +159,14 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 		return nil, nil, fmt.Errorf("create DNS proxy: %w", err)
 	}
 	engine.proxy = engineProxy
+	if path := connectionStorePath(); path != "" {
+		if store, storeErr := OpenConnectionStore(path); storeErr == nil {
+			engine.connections = store
+			engine.monitor = NewConnectionMonitor(store, ring, logger, c.ConnectionRetention)
+		} else if logger != nil {
+			logger.Printf("connection history disabled: %v", storeErr)
+		}
+	}
 	return engine, &Resolver{engine: engine, local: &dns.Client{Net: "udp", Timeout: c.Timeout}, localAddr: c.Listen, timeout: c.Timeout, requests: ring}, nil
 }
 
@@ -429,7 +440,10 @@ func (e *DNSProxyEngine) Start(ctx context.Context) error {
 		return err
 	}
 	e.started = true
-	e.ipc = newDNSIPCServer(e.requests, e)
+	if e.monitor != nil {
+		e.monitor.Start()
+	}
+	e.ipc = newDNSIPCServer(e.requests, e, e.monitor, e.firewall)
 	e.ipc.start()
 	return nil
 }
@@ -441,7 +455,20 @@ func (e *DNSProxyEngine) Shutdown(ctx context.Context) error {
 	if e.ipc != nil {
 		e.ipc.close()
 	}
+	if e.monitor != nil {
+		e.monitor.Shutdown()
+	}
+	if e.connections != nil {
+		_ = e.connections.Close()
+	}
 	return e.proxy.Shutdown(ctx)
+}
+
+func (e *DNSProxyEngine) RecentConnections(limit int) ([]ConnectionEntry, error) {
+	if e == nil || e.monitor == nil {
+		return nil, nil
+	}
+	return e.monitor.Recent(limit)
 }
 
 type slogWriter struct{ logger *log.Logger }

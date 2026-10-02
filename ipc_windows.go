@@ -23,6 +23,8 @@ type dnsIPCRequest struct {
 	Op         string     `json:"op"`
 	InstanceID string     `json:"instance_id,omitempty"`
 	Version    uint64     `json:"version,omitempty"`
+	Limit      int        `json:"limit,omitempty"`
+	Path       string     `json:"path,omitempty"`
 	Upstreams  []Upstream `json:"upstreams,omitempty"`
 }
 type dnsIPCResponse struct {
@@ -33,6 +35,7 @@ type dnsIPCResponse struct {
 	Version         uint64            `json:"version,omitempty"`
 	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
 	Entries         []DNSRequestEntry `json:"entries,omitempty"`
+	Connections     []ConnectionEntry `json:"connections,omitempty"`
 	Error           string            `json:"error,omitempty"`
 }
 
@@ -45,15 +48,29 @@ type dnsIPCServer struct {
 	instanceID string
 	ring       *DNSRequestRing
 	proxy      dnsEngineProxy
+	monitor    *ConnectionMonitor
+	firewall   *FirewallManager
 	stop       chan struct{}
 	done       chan struct{}
 	mu         sync.Mutex
 	active     windows.Handle
 }
 
-func newDNSIPCServer(ring *DNSRequestRing, proxy dnsEngineProxy) *dnsIPCServer {
+func newDNSIPCServer(ring *DNSRequestRing, proxy dnsEngineProxy, extras ...interface{}) *dnsIPCServer {
 	id := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
-	return &dnsIPCServer{pipeName: sondnsPipeName, instanceID: id, ring: ring, proxy: proxy, stop: make(chan struct{}), done: make(chan struct{})}
+	var monitor *ConnectionMonitor
+	var firewall *FirewallManager
+	for _, extra := range extras {
+		switch value := extra.(type) {
+		case *ConnectionMonitor:
+			monitor = value
+		case FirewallManager:
+			firewall = &value
+		case *FirewallManager:
+			firewall = value
+		}
+	}
+	return &dnsIPCServer{pipeName: sondnsPipeName, instanceID: id, ring: ring, proxy: proxy, monitor: monitor, firewall: firewall, stop: make(chan struct{}), done: make(chan struct{})}
 }
 
 func (s *dnsIPCServer) start() { go s.serve() }
@@ -142,6 +159,34 @@ func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
 			resp.Error = err.Error()
 		} else {
 			resp.OK = true
+		}
+	case "connections":
+		if s.monitor == nil {
+			resp.OK = true
+			break
+		}
+		connections, err := s.monitor.Recent(req.Limit)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.OK = true
+			resp.Connections = connections
+		}
+	case "block_app", "unblock_app":
+		if s.firewall == nil {
+			resp.Error = "firewall unavailable"
+		} else {
+			var err error
+			if req.Op == "block_app" {
+				err = s.firewall.BlockApp(req.Path)
+			} else {
+				err = s.firewall.AllowApp(req.Path)
+			}
+			if err != nil {
+				resp.Error = err.Error()
+			} else {
+				resp.OK = true
+			}
 		}
 	default:
 		resp.Error = fmt.Sprintf("unknown operation %q", req.Op)
