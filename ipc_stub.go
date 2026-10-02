@@ -10,7 +10,7 @@ type dnsEngineProxy interface {
 	SetUpstreams([]Upstream) error
 }
 
-func newDNSIPCServer(*DNSRequestRing, dnsEngineProxy, ...interface{}) *dnsIPCServer {
+func newDNSIPCServer(*DNSRequestRing, dnsEngineProxy) *dnsIPCServer {
 	return &dnsIPCServer{}
 }
 func (*dnsIPCServer) start() {}
@@ -19,8 +19,6 @@ func (*dnsIPCServer) close() {}
 type dnsIPCRequest struct {
 	Op        string     `json:"op"`
 	Version   uint64     `json:"version,omitempty"`
-	Limit     int        `json:"limit,omitempty"`
-	Path      string     `json:"path,omitempty"`
 	Upstreams []Upstream `json:"upstreams,omitempty"`
 }
 type dnsIPCResponse struct {
@@ -29,7 +27,6 @@ type dnsIPCResponse struct {
 	Version         uint64            `json:"version,omitempty"`
 	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
 	Entries         []DNSRequestEntry `json:"entries,omitempty"`
-	Connections     []ConnectionEntry `json:"connections,omitempty"`
 	Error           string            `json:"error,omitempty"`
 }
 

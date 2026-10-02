@@ -13,7 +13,6 @@
     "auto_restart": true
   },
   "timeout": "5s",
-  "connection_retention": "168h",
   "service_auto_start": false,
   "upstreams": [
     {

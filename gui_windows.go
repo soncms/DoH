@@ -845,13 +845,6 @@ func (g *guiState) installTray() error {
 		dispose()
 		return err
 	}
-	dashboard := walk.NewAction()
-	_ = dashboard.SetText("Open Connections dashboard")
-	dashboard.Triggered().Attach(openConnectionDashboard)
-	if err = ni.ContextMenu().Actions().Add(dashboard); err != nil {
-		dispose()
-		return err
-	}
 	exit := walk.NewAction()
 	_ = exit.SetText("Exit")
 	exit.Triggered().Attach(func() { g.exiting = true; _ = g.mw.Close() })

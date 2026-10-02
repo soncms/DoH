@@ -15,15 +15,14 @@ import (
 // Config is deliberately JSON so the service has no third-party config parser
 // and can be edited from a shell or deployment script.
 type Config struct {
-	Listen              string        `json:"listen"`
-	Interception        string        `json:"interception"`
-	DPI                 DPIConfig     `json:"dpi_bypass,omitempty"`
-	Upstreams           []Upstream    `json:"upstreams"`
-	BootstrapDNS        []string      `json:"bootstrap_dns,omitempty"`
-	Timeout             time.Duration `json:"timeout"`
-	LogFile             string        `json:"log_file"`
-	ServiceAutoStart    bool          `json:"service_auto_start"`
-	ConnectionRetention time.Duration `json:"connection_retention"`
+	Listen           string        `json:"listen"`
+	Interception     string        `json:"interception"`
+	DPI              DPIConfig     `json:"dpi_bypass,omitempty"`
+	Upstreams        []Upstream    `json:"upstreams"`
+	BootstrapDNS     []string      `json:"bootstrap_dns,omitempty"`
+	Timeout          time.Duration `json:"timeout"`
+	LogFile          string        `json:"log_file"`
+	ServiceAutoStart bool          `json:"service_auto_start"`
 }
 
 // DPIConfig controls the embedded zapret2/winws2 compatibility backend. The
@@ -104,9 +103,8 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	type alias Config
 	decoded := alias(*c)
 	aux := struct {
-		Timeout             json.RawMessage `json:"timeout"`
-		ConnectionRetention json.RawMessage `json:"connection_retention"`
-		Upstreams           json.RawMessage `json:"upstreams"`
+		Timeout   json.RawMessage `json:"timeout"`
+		Upstreams json.RawMessage `json:"upstreams"`
 		*alias
 	}{alias: &decoded}
 	if err := json.Unmarshal(data, &aux); err != nil {
@@ -138,22 +136,6 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 			decoded.Timeout = time.Duration(nanos)
 		}
 	}
-	if len(aux.ConnectionRetention) != 0 && string(aux.ConnectionRetention) != "null" {
-		var text string
-		if json.Unmarshal(aux.ConnectionRetention, &text) == nil {
-			d, err := time.ParseDuration(text)
-			if err != nil {
-				return fmt.Errorf("invalid connection_retention %q: %w", text, err)
-			}
-			decoded.ConnectionRetention = d
-		} else {
-			var nanos int64
-			if err := json.Unmarshal(aux.ConnectionRetention, &nanos); err != nil {
-				return fmt.Errorf("connection_retention must be a duration string: %w", err)
-			}
-			decoded.ConnectionRetention = time.Duration(nanos)
-		}
-	}
 	*c = Config(decoded)
 	return nil
 }
@@ -161,10 +143,9 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 func (c Config) MarshalJSON() ([]byte, error) {
 	type alias Config
 	return json.Marshal(struct {
-		Timeout             string `json:"timeout"`
-		ConnectionRetention string `json:"connection_retention"`
+		Timeout string `json:"timeout"`
 		alias
-	}{Timeout: c.Timeout.String(), ConnectionRetention: c.ConnectionRetention.String(), alias: alias(c)})
+	}{Timeout: c.Timeout.String(), alias: alias(c)})
 }
 
 func DefaultConfig() Config {
@@ -178,9 +159,8 @@ func DefaultConfig() Config {
 			FailOpen:    true,
 			AutoRestart: true,
 		},
-		Timeout:             5 * time.Second,
-		ConnectionRetention: 7 * 24 * time.Hour,
-		LogFile:             defaultLogPath(),
+		Timeout: 5 * time.Second,
+		LogFile: defaultLogPath(),
 		Upstreams: []Upstream{
 			PredefinedUpstream(ProviderSonCMS),
 		},
@@ -205,9 +185,6 @@ func (c *Config) normalize() error {
 	}
 	if c.Timeout <= 0 {
 		c.Timeout = 5 * time.Second
-	}
-	if c.ConnectionRetention <= 0 {
-		c.ConnectionRetention = 7 * 24 * time.Hour
 	}
 	if strings.TrimSpace(c.LogFile) == "" {
 		c.LogFile = defaultLogPath()

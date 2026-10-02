@@ -343,9 +343,6 @@ func uninstallService() error {
 		if err := cleanupWinDivertDriver(); err != nil {
 			return err
 		}
-		if err := (FirewallManager{}).RemoveAll(); err != nil {
-			return err
-		}
 		exe, exeErr := os.Executable()
 		if exeErr != nil {
 			return exeErr
@@ -367,9 +364,6 @@ func uninstallService() error {
 	}
 	_ = syncGUIAutostart(false)
 	if err := cleanupWinDivertDriver(); err != nil {
-		return err
-	}
-	if err := (FirewallManager{}).RemoveAll(); err != nil {
 		return err
 	}
 	if serviceExe == "" {
