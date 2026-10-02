@@ -29,6 +29,9 @@ func TestDNSDatagramIPv4Reply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if datagram.source != "192.168.1.20:5353" || datagram.dest != "192.168.1.1:53" {
+		t.Fatalf("packet endpoints = %q -> %q", datagram.source, datagram.dest)
+	}
 	response, err := datagram.reply(wire)
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +70,9 @@ func TestDNSDatagramIPv6Reply(t *testing.T) {
 	datagram, err := parseDNSDatagram(raw)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if datagram.source != "[2001:db8::20]:5353" || datagram.dest != "[2001:db8::1]:53" {
+		t.Fatalf("packet endpoints = %q -> %q", datagram.source, datagram.dest)
 	}
 	response, err := datagram.reply(wire)
 	if err != nil {

@@ -145,7 +145,8 @@ func (i *Interceptor) answer(packet dnsDatagram, addr winDivertAddress) {
 		}
 		return
 	}
-	wire, err := i.resolver.Resolve(i.ctx, packet.payload)
+	ctx := withDNSPacketServer(i.ctx, packet.dest)
+	wire, err := i.resolver.Resolve(ctx, packet.payload)
 	if i.ctx.Err() != nil {
 		return
 	}

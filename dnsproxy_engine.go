@@ -173,7 +173,7 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 	var lastErr error
 	attempts := make([]DNSAttempt, 0, maxAttempts)
 	defer func() {
-		(requestLogHandler{ring: e.requests}).recordWithAttempts(lastContext, lastErr, time.Since(started), attempts)
+		(requestLogHandler{ring: e.requests}).recordWithAttempts(lastContext, lastErr, time.Since(started), attempts, dnsPacketServer(ctx))
 	}()
 	perAttemptTimeout := 2 * time.Second
 	if e.timeout > 0 && e.timeout < perAttemptTimeout {
@@ -228,10 +228,10 @@ func (h requestLogHandler) ServeDNS(ctx context.Context, p *dnsproxy.Proxy, dctx
 }
 
 func (h requestLogHandler) record(dctx *dnsproxy.DNSContext, err error, elapsed time.Duration) {
-	h.recordWithAttempts(dctx, err, elapsed, nil)
+	h.recordWithAttempts(dctx, err, elapsed, nil, "")
 }
 
-func (h requestLogHandler) recordWithAttempts(dctx *dnsproxy.DNSContext, err error, elapsed time.Duration, attempts []DNSAttempt) {
+func (h requestLogHandler) recordWithAttempts(dctx *dnsproxy.DNSContext, err error, elapsed time.Duration, attempts []DNSAttempt, server string) {
 	if h.ring == nil || dctx == nil || dctx.Req == nil || len(dctx.Req.Question) == 0 {
 		return
 	}
@@ -247,6 +247,7 @@ func (h requestLogHandler) recordWithAttempts(dctx *dnsproxy.DNSContext, err err
 	entry := DNSRequestEntry{
 		Time: completed.Add(-elapsed), CompletedTime: completed,
 		Domain: domain, Type: qtype, Protocol: protocolName(dctx.Proto),
+		Server: server,
 		Result: result, RCode: responseCode(dctx.Res),
 		LatencyMS: elapsed.Milliseconds(), DurationUS: elapsed.Microseconds(),
 		AnswerIPs: answerIPs(dctx.Res), Attempts: append([]DNSAttempt(nil), attempts...),

@@ -25,6 +25,7 @@ type DNSRequestEntry struct {
 	Domain        string       `json:"domain"`
 	Type          string       `json:"type"`
 	Protocol      string       `json:"protocol,omitempty"`
+	Server        string       `json:"server,omitempty"`
 	Result        string       `json:"result"`
 	RCode         string       `json:"rcode,omitempty"`
 	LatencyMS     int64        `json:"latency_ms"` // Kept for IPC compatibility.
