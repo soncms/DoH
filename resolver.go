@@ -19,20 +19,6 @@ import (
 
 var errAllUpstreams = errors.New("all DoH upstreams failed")
 
-type dnsPacketServerKey struct{}
-
-func withDNSPacketServer(ctx context.Context, server string) context.Context {
-	return context.WithValue(ctx, dnsPacketServerKey{}, server)
-}
-
-func dnsPacketServer(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	server, _ := ctx.Value(dnsPacketServerKey{}).(string)
-	return server
-}
-
 type Resolver struct {
 	engine    *DNSProxyEngine
 	clients   []*dohClient

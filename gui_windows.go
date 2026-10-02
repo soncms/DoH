@@ -16,40 +16,41 @@ import (
 
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
+	"github.com/miekg/dns"
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 )
 
 type guiState struct {
-	mw                                                       *walk.MainWindow
-	radioSonCMS, radioNextDNS                                *walk.RadioButton
-	autoStart                                                *walk.CheckBox
-	clearButton                                              *walk.PushButton
-	serviceButton                                            *walk.SplitButton
-	stopAction, restartAction, uninstallAction               *walk.Action
-	status, serviceStatus                                    *walk.Label
-	detailsButton                                            *walk.PushButton
-	dpiMode                                                  *walk.ComboBox
-	requestLog                                               *walk.TableView
-	logModel                                                 *requestLogModel
-	logStyler                                                *requestLogStyler
-	notifyIcon                                               *walk.NotifyIcon
-	logVersion                                               uint64
-	logGeneration                                            uint64
-	logPollPending, logClearing                              bool
-	lastLogError                                             string
-	logHighlightGeneration                                   uint64
-	logHighlightTimer                                        *time.Timer
-	instanceID                                               string
-	service                                                  serviceSnapshot
-	copyDomainAction, copyIPAction, detailsAction            *walk.Action
-	serviceKnown, autoDirty, busy, exiting, syncingAutoStart bool
-	syncingDPI                                               bool
-	columnsInitialized                                       bool
-	config                                                   Config
-	configPath                                               string
-	ctx                                                      context.Context
-	cancel                                                   context.CancelFunc
+	mw                                                                 *walk.MainWindow
+	radioSonCMS, radioNextDNS                                          *walk.RadioButton
+	autoStart                                                          *walk.CheckBox
+	checkButton, clearButton                                           *walk.PushButton
+	serviceButton                                                      *walk.SplitButton
+	stopAction, restartAction, uninstallAction                         *walk.Action
+	status, serviceStatus                                              *walk.Label
+	detailsButton                                                      *walk.PushButton
+	dpiMode                                                            *walk.ComboBox
+	requestLog                                                         *walk.TableView
+	logModel                                                           *requestLogModel
+	logStyler                                                          *requestLogStyler
+	notifyIcon                                                         *walk.NotifyIcon
+	logVersion                                                         uint64
+	logGeneration                                                      uint64
+	logPollPending, logClearing                                        bool
+	lastLogError                                                       string
+	logHighlightGeneration                                             uint64
+	logHighlightTimer                                                  *time.Timer
+	instanceID                                                         string
+	service                                                            serviceSnapshot
+	copyDomainAction, copyIPAction, detailsAction                      *walk.Action
+	serviceKnown, autoDirty, busy, checking, exiting, syncingAutoStart bool
+	syncingDPI                                                         bool
+	columnsInitialized                                                 bool
+	config                                                             Config
+	configPath                                                         string
+	ctx                                                                context.Context
+	cancel                                                             context.CancelFunc
 }
 
 func runGUI() error { return runGUIWithConfigAndTray(defaultConfigPath(), false) }
@@ -342,6 +343,7 @@ func (g *guiState) updateActions() {
 	enabled := g.serviceKnown && !g.busy && !g.service.pending()
 	g.serviceButton.SetEnabled(enabled)
 	g.autoStart.SetEnabled(!g.busy)
+	g.checkButton.SetEnabled(!g.busy && !g.checking)
 	g.radioSonCMS.SetEnabled(!g.busy)
 	g.radioNextDNS.SetEnabled(!g.busy)
 	if !g.service.Exists {
@@ -517,6 +519,48 @@ func (g *guiState) uninstallService() {
 	g.runAction("Removing…", func() (string, error) {
 		return "Installation removed; SonDNS is ready to install again", uninstallService()
 	}, nil)
+}
+
+func (g *guiState) checkResolver() {
+	if g.checking {
+		return
+	}
+	c, err := g.editedConfig()
+	if err != nil {
+		g.setStatus(err.Error(), true)
+		return
+	}
+	g.checking = true
+	g.checkButton.SetEnabled(false)
+	g.setStatus("Checking…", false)
+	go func() {
+		started := time.Now()
+		c.Upstreams = c.Upstreams[:1]
+		r, err := NewResolver(c)
+		if err == nil {
+			defer func() {
+				for _, client := range r.clients {
+					client.http.CloseIdleConnections()
+				}
+			}()
+			msg := new(dns.Msg)
+			msg.SetQuestion("example.com.", dns.TypeA)
+			wire, _ := msg.Pack()
+			ctx, cancel := context.WithTimeout(g.ctx, c.Timeout)
+			defer cancel()
+			_, err = r.Resolve(ctx, wire)
+		}
+		g.onUI(func() {
+			g.checking = false
+			g.checkButton.SetEnabled(true)
+			if err != nil {
+				g.setStatus("Check failed: "+err.Error(), true)
+			} else {
+				provider := c.CurrentProvider()
+				g.setStatus(fmt.Sprintf("%s OK · %d ms", provider, time.Since(started).Milliseconds()), false)
+			}
+		})
+	}()
 }
 
 func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instanceID string) {
@@ -730,15 +774,7 @@ func (g *guiState) showSelectedRequest() {
 		return
 	}
 	e := g.logModel.rows[idx]
-	server := e.Server
-	if server == "" {
-		server = "—"
-	}
-	answers := strings.Join(e.AnswerIPs, ", ")
-	if answers == "" {
-		answers = "—"
-	}
-	message := fmt.Sprintf("Domain: %s\nType: %s\nResult: %s\nServer: %s\nAnswer IP: %s\nProtocol: %s\nLatency: %.1f ms", strings.TrimSuffix(e.Domain, "."), e.Type, e.Result, server, answers, e.Protocol, float64(e.DurationUS)/1000)
+	message := fmt.Sprintf("Domain: %s\nType: %s\nResult: %s\nProtocol: %s\nLatency: %.1f ms", strings.TrimSuffix(e.Domain, "."), e.Type, e.Result, e.Protocol, float64(e.DurationUS)/1000)
 	if e.Error != "" {
 		message += "\nError: " + e.Error
 	}

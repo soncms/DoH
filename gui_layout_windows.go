@@ -106,6 +106,10 @@ func (g *guiState) build() error {
 	_ = g.radioNextDNS.SetText("NextDNS")
 	_ = g.radioNextDNS.SetMinMaxSize(walk.Size{Width: 85, Height: 24}, walk.Size{Width: 85, Height: 24})
 	_, _ = walk.NewHSpacer(dnsRow)
+	g.checkButton, err = uiButton(dnsRow, "Check", 64, 26, g.checkResolver)
+	if err != nil {
+		return err
+	}
 	dpiRow, err := uiRow(mw, 26)
 	if err != nil {
 		return err
@@ -191,10 +195,10 @@ func (g *guiState) build() error {
 	g.requestLog.SetColumnsOrderable(false)
 	g.requestLog.SetScrollbarOrientation(walk.Horizontal | walk.Vertical)
 	_ = g.requestLog.SetMinMaxSize(walk.Size{Height: 230}, walk.Size{})
-	for i, name := range []string{"Time", "Domain", "Type", "Result", "Server", "Answer IP", "Latency"} {
+	for i, name := range []string{"Time", "Domain", "Type", "Result", "Latency"} {
 		col := walk.NewTableViewColumn()
 		_ = col.SetTitle(name)
-		if i == 6 {
+		if i == 4 {
 			_ = col.SetAlignment(walk.AlignFar)
 		}
 		if err = g.requestLog.Columns().Add(col); err != nil {
@@ -241,7 +245,7 @@ func (g *guiState) resizeLogColumns() {
 	if width <= 0 {
 		return
 	}
-	defaults := []int{65, max(145, width-65-55-80-120-125-90), 55, 80, 120, 125, 90}
+	defaults := []int{65, max(190, width-65-55-80-90), 55, 80, 90}
 	for i, w := range defaults {
 		_ = g.requestLog.Columns().At(i).SetWidth(w)
 	}
@@ -282,16 +286,6 @@ func (m *requestLogModel) Value(row, col int) interface{} {
 	case 3:
 		return e.Result
 	case 4:
-		if e.Server == "" {
-			return "—"
-		}
-		return e.Server
-	case 5:
-		if len(e.AnswerIPs) == 0 {
-			return "—"
-		}
-		return strings.Join(e.AnswerIPs, ", ")
-	case 6:
 		if e.DurationUS > 0 && e.DurationUS < 1000 {
 			return fmt.Sprintf("%d µs", e.DurationUS)
 		}

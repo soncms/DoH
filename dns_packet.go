@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 )
 
 type dnsDatagram struct {
@@ -12,8 +11,6 @@ type dnsDatagram struct {
 	payload   []byte
 	udpOffset int
 	ipv6      bool
-	source    string
-	dest      string
 }
 
 func parseDNSDatagram(raw []byte) (dnsDatagram, error) {
@@ -32,15 +29,11 @@ func parseDNSDatagram(raw []byte) (dnsDatagram, error) {
 		if binary.BigEndian.Uint16(raw[6:8])&0x3fff != 0 {
 			return p, errors.New("fragmented IPv4 packet")
 		}
-		p.source = net.IP(raw[12:16]).String()
-		p.dest = net.IP(raw[16:20]).String()
 	case 6:
 		if len(raw) < 40 {
 			return p, errors.New("short IPv6 packet")
 		}
 		p.ipv6 = true
-		p.source = net.IP(raw[8:24]).String()
-		p.dest = net.IP(raw[24:40]).String()
 		end = 40 + int(binary.BigEndian.Uint16(raw[4:6]))
 		if end > len(raw) {
 			return p, errors.New("invalid IPv6 payload length")
@@ -76,14 +69,10 @@ func parseDNSDatagram(raw []byte) (dnsDatagram, error) {
 		return p, errors.New("short UDP header")
 	}
 	udp := raw[p.udpOffset:end]
-	sourcePort := binary.BigEndian.Uint16(udp[0:2])
-	destPort := binary.BigEndian.Uint16(udp[2:4])
 	length := int(binary.BigEndian.Uint16(udp[4:6]))
-	if destPort != 53 || length < 20 || length > len(udp) {
+	if binary.BigEndian.Uint16(udp[2:4]) != 53 || length < 20 || length > len(udp) {
 		return p, errors.New("invalid UDP DNS query")
 	}
-	p.source = net.JoinHostPort(p.source, fmt.Sprintf("%d", sourcePort))
-	p.dest = net.JoinHostPort(p.dest, fmt.Sprintf("%d", destPort))
 	p.raw = raw[:end]
 	p.payload = udp[8:length]
 	return p, nil

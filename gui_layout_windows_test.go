@@ -38,7 +38,7 @@ func TestNativeLayout(t *testing.T) {
 	if err = g.build(); err != nil {
 		t.Fatal(err)
 	}
-	wantColumns := []string{"Time", "Domain", "Type", "Result", "Server", "Answer IP", "Latency"}
+	wantColumns := []string{"Time", "Domain", "Type", "Result", "Latency"}
 	if got := g.requestLog.Columns().Len(); got != len(wantColumns) {
 		t.Fatalf("column count = %d, want %d", got, len(wantColumns))
 	}

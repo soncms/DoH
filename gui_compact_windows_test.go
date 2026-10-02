@@ -10,7 +10,7 @@ func TestCompactLogLatencyColumn(t *testing.T) {
 		want string
 	}{{250, "250 µs"}, {12500, "12.5 ms"}, {0, "0.0 ms"}} {
 		m := &requestLogModel{rows: []DNSRequestEntry{{Upstream: "hidden-upstream", DurationUS: tc.us}}}
-		if got := m.Value(0, 6); got != tc.want {
+		if got := m.Value(0, 4); got != tc.want {
 			t.Fatalf("latency = %v, want %s", got, tc.want)
 		}
 	}
