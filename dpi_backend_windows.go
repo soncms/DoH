@@ -141,7 +141,7 @@ func (b *DPIBackend) Shutdown() {
 func ensureEmbeddedZapret2() (string, error) {
 	base := os.Getenv("ProgramData")
 	if base == "" {
-		base = "."
+		return "", errors.New("ProgramData is unavailable; refusing to extract DPI runtime")
 	}
 	root := filepath.Join(base, "SonDNS")
 	assetDir := filepath.Join(root, "zapret2")

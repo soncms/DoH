@@ -137,6 +137,12 @@ func (i *Interceptor) receiveLoop() {
 func (i *Interceptor) answer(packet dnsDatagram, addr winDivertAddress) {
 	request := new(dns.Msg)
 	if err := request.Unpack(packet.payload); err != nil || request.Response || len(request.Question) == 0 {
+		// The filter is intentionally broad at UDP/53. Preserve packets that
+		// are not client DNS queries so interception cannot black-hole a valid
+		// response, a non-DNS payload, or a newer DNS extension we do not parse.
+		if err := i.sendPacket(packet.raw, &addr); err != nil {
+			i.log.Printf("reinject non-query DNS packet: %v", err)
+		}
 		return
 	}
 	wire, err := i.resolver.Resolve(i.ctx, packet.payload)
@@ -236,7 +242,7 @@ func (i *Interceptor) Shutdown() {
 func resolveWinDivertDir() (string, error) {
 	progData := os.Getenv("ProgramData")
 	if progData == "" {
-		progData = "."
+		return "", errors.New("ProgramData is unavailable; refusing to extract WinDivert runtime")
 	}
 	appDir := filepath.Join(progData, "SonDNS")
 	if len(embeddedWinDivertDLL) > 0 && len(embeddedWinDivertSYS) > 0 {
