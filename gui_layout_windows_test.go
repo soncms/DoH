@@ -19,6 +19,14 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
+func TestAppIconResource(t *testing.T) {
+	icon, err := newAppIcon()
+	if err != nil {
+		t.Fatalf("load embedded app icon: %v", err)
+	}
+	icon.Dispose()
+}
+
 // Run explicitly on an interactive Windows desktop. This exercises our actual
 // widgets/layout, without changing any Windows display or service settings.
 func TestNativeLayout(t *testing.T) {
@@ -38,6 +46,51 @@ func TestNativeLayout(t *testing.T) {
 	if err = g.build(); err != nil {
 		t.Fatal(err)
 	}
+	g.setDNSProvider(ProviderSonCMS)
+	if got := g.selectedDNSProvider(); got != ProviderSonCMS {
+		t.Fatalf("DNS provider = %q, want %s", got, ProviderSonCMS)
+	}
+	g.setDNSProvider(ProviderNextDNS)
+	if got := g.selectedDNSProvider(); got != ProviderNextDNS {
+		t.Fatalf("DNS provider = %q, want %s", got, ProviderNextDNS)
+	}
+	if got := (&dnsProviderModel{}).ItemCount(); got != 2 {
+		t.Fatalf("DNS provider menu item count = %d, want 2", got)
+	}
+	for i, want := range []string{ProviderSonCMS, ProviderNextDNS} {
+		if got := (&dnsProviderModel{}).Value(i); got != want {
+			t.Errorf("DNS provider menu item %d = %v, want %q", i, got, want)
+		}
+	}
+	g.setDPIMode(false, "default")
+	enabled, mode := g.selectedDPIMode()
+	if enabled || mode != "default" || g.dpiMode.CurrentIndex() != dpiDisabledIndex {
+		t.Fatalf("DPI mode = enabled:%v mode:%q index:%d, want disabled/default/%d", enabled, mode, g.dpiMode.CurrentIndex(), dpiDisabledIndex)
+	}
+	g.setDPIMode(true, "default")
+	enabled, mode = g.selectedDPIMode()
+	if !enabled || mode != "default" {
+		t.Fatalf("DPI default selection = enabled:%v mode:%q, want enabled/default", enabled, mode)
+	}
+	g.config.DPI.CaptureMode = "tcp"
+	g.setDPIMode(false, "tcp")
+	enabled, mode = g.selectedDPIMode()
+	if enabled || mode != "tcp" {
+		t.Fatalf("DPI disabled selection = enabled:%v mode:%q, want disabled/tcp", enabled, mode)
+	}
+	g.setDPIMode(true, "tcp")
+	enabled, mode = g.selectedDPIMode()
+	if !enabled || mode != "tcp" {
+		t.Fatalf("DPI TCP selection = enabled:%v mode:%q, want enabled/tcp", enabled, mode)
+	}
+	if got := (&dpiCaptureModeModel{}).ItemCount(); got != 4 {
+		t.Fatalf("DPI menu item count = %d, want 4", got)
+	}
+	for i, want := range []string{"Disabled", "Default", "TCP", "TCP + QUIC UDP"} {
+		if got := (&dpiCaptureModeModel{}).Value(i); got != want {
+			t.Errorf("DPI menu item %d = %v, want %q", i, got, want)
+		}
+	}
 	wantColumns := []string{"Time", "Domain", "Type", "Result", "Latency"}
 	if got := g.requestLog.Columns().Len(); got != len(wantColumns) {
 		t.Fatalf("column count = %d, want %d", got, len(wantColumns))
@@ -47,7 +100,6 @@ func TestNativeLayout(t *testing.T) {
 			t.Errorf("column %d = %q, want %q", i, got, title)
 		}
 	}
-	g.radioNextDNS.SetChecked(true)
 	g.applyServiceSnapshot(serviceSnapshot{true, svc.Running, windows.SERVICE_DEMAND_START}, nil)
 	g.applyServiceSnapshot(serviceSnapshot{}, errors.New("access denied"))
 	if g.serviceStatus.Text() != "status unavailable" || g.serviceButton.Enabled() {

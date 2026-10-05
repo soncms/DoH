@@ -57,7 +57,7 @@ func (b *DPIBackend) Start() error {
 
 func (b *DPIBackend) command() (string, []string, error) {
 	if b.cfg.Backend == embeddedDPIBackend {
-		root, err := ensureEmbeddedZapret2()
+		root, err := ensureEmbeddedZapret2(b.logger)
 		if err != nil {
 			return "", nil, err
 		}
@@ -138,7 +138,7 @@ func (b *DPIBackend) Shutdown() {
 	})
 }
 
-func ensureEmbeddedZapret2() (string, error) {
+func ensureEmbeddedZapret2(logger *log.Logger) (string, error) {
 	base := os.Getenv("ProgramData")
 	if base == "" {
 		return "", errors.New("ProgramData is unavailable; refusing to extract DPI runtime")
@@ -151,35 +151,26 @@ func ensureEmbeddedZapret2() (string, error) {
 		}
 	}
 	assets := []struct {
+		name string
 		path string
 		data []byte
 		mode os.FileMode
 	}{
-		{filepath.Join(root, "winws2.exe"), embeddedZapret2WinWS, 0o755},
-		{filepath.Join(root, "cygwin1.dll"), embeddedZapret2Cygwin, 0o644},
-		{filepath.Join(assetDir, "lua", "zapret-lib.lua"), embeddedZapret2LibLua, 0o644},
-		{filepath.Join(assetDir, "lua", "zapret-antidpi.lua"), embeddedZapret2AntiDPILua, 0o644},
-		{filepath.Join(assetDir, "windivert.filter", "windivert_part.discord_media.txt"), embeddedZapret2DiscordFilter, 0o644},
-		{filepath.Join(assetDir, "windivert.filter", "windivert_part.stun.txt"), embeddedZapret2STUNFilter, 0o644},
-		{filepath.Join(assetDir, "windivert.filter", "windivert_part.wireguard.txt"), embeddedZapret2WireguardFilter, 0o644},
-		{filepath.Join(assetDir, "windivert.filter", "windivert_part.quic_initial_ietf.txt"), embeddedZapret2QUICFilter, 0o644},
+		{"third_party/zapret2/winws2.exe", filepath.Join(root, "winws2.exe"), embeddedZapret2WinWS, 0o755},
+		{"third_party/zapret2/cygwin1.dll", filepath.Join(root, "cygwin1.dll"), embeddedZapret2Cygwin, 0o644},
+		{"third_party/zapret2/lua/zapret-lib.lua", filepath.Join(assetDir, "lua", "zapret-lib.lua"), embeddedZapret2LibLua, 0o644},
+		{"third_party/zapret2/lua/zapret-antidpi.lua", filepath.Join(assetDir, "lua", "zapret-antidpi.lua"), embeddedZapret2AntiDPILua, 0o644},
+		{"third_party/zapret2/windivert.filter/windivert_part.discord_media.txt", filepath.Join(assetDir, "windivert.filter", "windivert_part.discord_media.txt"), embeddedZapret2DiscordFilter, 0o644},
+		{"third_party/zapret2/windivert.filter/windivert_part.stun.txt", filepath.Join(assetDir, "windivert.filter", "windivert_part.stun.txt"), embeddedZapret2STUNFilter, 0o644},
+		{"third_party/zapret2/windivert.filter/windivert_part.wireguard.txt", filepath.Join(assetDir, "windivert.filter", "windivert_part.wireguard.txt"), embeddedZapret2WireguardFilter, 0o644},
+		{"third_party/zapret2/windivert.filter/windivert_part.quic_initial_ietf.txt", filepath.Join(assetDir, "windivert.filter", "windivert_part.quic_initial_ietf.txt"), embeddedZapret2QUICFilter, 0o644},
 	}
 	for _, asset := range assets {
-		if err := writeEmbeddedAsset(asset.path, asset.data, asset.mode); err != nil {
+		if err := writeEmbeddedAsset(logger, asset.name, asset.path, asset.data, asset.mode); err != nil {
 			return "", err
 		}
 	}
 	return root, nil
-}
-
-func writeEmbeddedAsset(path string, data []byte, mode os.FileMode) error {
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(data) {
-		return nil
-	}
-	if err := os.WriteFile(path, data, mode); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
 }
 
 func zapret2Arguments(root string, cfg DPIConfig) ([]string, error) {

@@ -153,7 +153,7 @@ func DefaultConfig() Config {
 		Listen:       "127.0.0.1:5300",
 		Interception: "windivert",
 		DPI: DPIConfig{
-			Enabled:     true,
+			Enabled:     false,
 			Backend:     "embedded-zapret2",
 			CaptureMode: "default",
 			FailOpen:    true,

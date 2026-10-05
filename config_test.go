@@ -110,10 +110,20 @@ func TestNormalizeDPIBackendIsFailOpen(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigEnablesEmbeddedDPI(t *testing.T) {
+func TestDefaultConfigDisablesEmbeddedDPI(t *testing.T) {
 	c := DefaultConfig()
-	if !c.DPI.Enabled || c.DPI.Backend != "embedded-zapret2" || !c.DPI.FailOpen {
+	if c.DPI.Enabled || c.DPI.Backend != "embedded-zapret2" || !c.DPI.FailOpen {
 		t.Fatalf("unexpected default DPI configuration: %+v", c.DPI)
+	}
+}
+
+func TestNormalizePreservesExplicitDPIEnablement(t *testing.T) {
+	c := Config{Upstreams: []Upstream{{URL: "https://resolver.example/dns-query"}}, DPI: DPIConfig{Enabled: true}}
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.DPI.Enabled {
+		t.Fatal("explicit DPI enablement was reset during normalization")
 	}
 }
 

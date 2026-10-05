@@ -6,9 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
 	"os"
 	"strings"
 	"syscall"
@@ -16,41 +13,40 @@ import (
 
 	"github.com/lxn/walk"
 	"github.com/lxn/win"
-	"github.com/miekg/dns"
 	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 )
 
 type guiState struct {
-	mw                                                                 *walk.MainWindow
-	radioSonCMS, radioNextDNS                                          *walk.RadioButton
-	autoStart                                                          *walk.CheckBox
-	checkButton, clearButton                                           *walk.PushButton
-	serviceButton                                                      *walk.SplitButton
-	stopAction, restartAction, uninstallAction                         *walk.Action
-	status, serviceStatus                                              *walk.Label
-	detailsButton                                                      *walk.PushButton
-	dpiMode                                                            *walk.ComboBox
-	requestLog                                                         *walk.TableView
-	logModel                                                           *requestLogModel
-	logStyler                                                          *requestLogStyler
-	notifyIcon                                                         *walk.NotifyIcon
-	logVersion                                                         uint64
-	logGeneration                                                      uint64
-	logPollPending, logClearing                                        bool
-	lastLogError                                                       string
-	logHighlightGeneration                                             uint64
-	logHighlightTimer                                                  *time.Timer
-	instanceID                                                         string
-	service                                                            serviceSnapshot
-	copyDomainAction, copyIPAction, detailsAction                      *walk.Action
-	serviceKnown, autoDirty, busy, checking, exiting, syncingAutoStart bool
-	syncingDPI                                                         bool
-	columnsInitialized                                                 bool
-	config                                                             Config
-	configPath                                                         string
-	ctx                                                                context.Context
-	cancel                                                             context.CancelFunc
+	mw                                                       *walk.MainWindow
+	dnsProvider                                              *walk.ComboBox
+	autoStart                                                *walk.CheckBox
+	clearButton                                              *walk.PushButton
+	serviceButton                                            *walk.SplitButton
+	stopAction, restartAction, uninstallAction               *walk.Action
+	status, serviceStatus                                    *walk.Label
+	detailsButton                                            *walk.PushButton
+	dpiMode                                                  *walk.ComboBox
+	requestLog                                               *walk.TableView
+	logModel                                                 *requestLogModel
+	logStyler                                                *requestLogStyler
+	notifyIcon                                               *walk.NotifyIcon
+	logVersion                                               uint64
+	logGeneration                                            uint64
+	logPollPending, logClearing                              bool
+	lastLogError                                             string
+	logHighlightGeneration                                   uint64
+	logHighlightTimer                                        *time.Timer
+	instanceID                                               string
+	service                                                  serviceSnapshot
+	copyDomainAction, copyIPAction, detailsAction            *walk.Action
+	serviceKnown, autoDirty, busy, exiting, syncingAutoStart bool
+	syncingDPI, syncingProvider                              bool
+	columnsInitialized                                       bool
+	config                                                   Config
+	configPath                                               string
+	ctx                                                      context.Context
+	cancel                                                   context.CancelFunc
 }
 
 func runGUI() error { return runGUIWithConfigAndTray(defaultConfigPath(), false) }
@@ -93,65 +89,108 @@ func runGUIWithConfigAndTray(path string, startInTray bool) error {
 	if err = g.build(); err != nil {
 		return err
 	}
-	if c.CurrentProvider() == ProviderNextDNS {
-		g.radioNextDNS.SetChecked(true)
-	} else {
-		g.radioSonCMS.SetChecked(true)
-	}
-	g.radioSonCMS.CheckedChanged().Attach(func() {
-		if g.radioSonCMS.Checked() {
-			g.switchProvider(ProviderSonCMS)
-		}
-	})
-	g.radioNextDNS.CheckedChanged().Attach(func() {
-		if g.radioNextDNS.Checked() {
-			g.switchProvider(ProviderNextDNS)
-		}
-	})
+	g.setDNSProvider(c.CurrentProvider())
 	g.autoStart.SetChecked(c.ServiceAutoStart)
 	g.autoStart.CheckedChanged().Attach(g.toggleAutoStart)
-	g.setCaptureMode(c.DPI.CaptureMode)
+	g.setDPIMode(c.DPI.Enabled, c.DPI.CaptureMode)
 	if err = g.installTray(); err != nil {
 		return fmt.Errorf("initialize tray icon: %w", err)
 	}
 	if !startInTray {
 		mw.Show()
-		_ = g.radioSonCMS.SetFocus()
+		_ = g.dnsProvider.SetFocus()
 	}
 	go g.monitor()
 	go g.monitorRequestLog()
-	go g.startServiceIfNeeded()
 	mw.Run()
 	return nil
 }
 
-var dpiCaptureModes = []string{"Default", "TCP", "TCP + QUIC UDP"}
-var dpiCaptureModeValues = []string{"default", "tcp", "tcp+udp"}
+var dnsProviderNames = []string{ProviderSonCMS, ProviderNextDNS}
+
+type dnsProviderModel struct{ walk.ListModelBase }
+
+func (m *dnsProviderModel) ItemCount() int              { return len(dnsProviderNames) }
+func (m *dnsProviderModel) Value(index int) interface{} { return dnsProviderNames[index] }
+
+func (g *guiState) selectedDNSProvider() string {
+	idx := g.dnsProvider.CurrentIndex()
+	if idx < 0 || idx >= len(dnsProviderNames) {
+		return g.config.CurrentProvider()
+	}
+	return dnsProviderNames[idx]
+}
+
+func (g *guiState) setDNSProvider(provider string) {
+	index := 0
+	for i, name := range dnsProviderNames {
+		if name == provider {
+			index = i
+			break
+		}
+	}
+	g.syncingProvider = true
+	_ = g.dnsProvider.SetCurrentIndex(index)
+	g.syncingProvider = false
+}
+
+func (g *guiState) changeDNSProvider() {
+	if g.syncingProvider || g.dnsProvider == nil {
+		return
+	}
+	provider := g.selectedDNSProvider()
+	previous := g.config
+	candidate := g.config
+	candidate.Upstreams = []Upstream{PredefinedUpstream(provider)}
+	if err := SaveConfig(g.configPath, candidate); err != nil {
+		g.setDNSProvider(previous.CurrentProvider())
+		g.setStatus("DNS server save failed: "+err.Error(), true)
+		return
+	}
+	g.config = candidate
+	g.switchProvider(provider)
+}
+
+var dpiCaptureModes = []string{"Disabled", "Default", "TCP", "TCP + QUIC UDP"}
+var dpiCaptureModeValues = []string{"disabled", "default", "tcp", "tcp+udp"}
+
+const dpiDisabledIndex = 0
 
 type dpiCaptureModeModel struct{ walk.ListModelBase }
 
 func (m *dpiCaptureModeModel) ItemCount() int              { return len(dpiCaptureModes) }
 func (m *dpiCaptureModeModel) Value(index int) interface{} { return dpiCaptureModes[index] }
 
-func (g *guiState) captureModeValue() string {
+func (g *guiState) selectedDPIMode() (bool, string) {
 	idx := g.dpiMode.CurrentIndex()
-	if idx < 0 || idx >= len(dpiCaptureModeValues) {
-		return "default"
+	mode := g.config.DPI.CaptureMode
+	if mode == "" {
+		mode = "default"
 	}
-	return dpiCaptureModeValues[idx]
+	if idx == dpiDisabledIndex {
+		return false, mode
+	}
+	if idx < 0 || idx >= len(dpiCaptureModeValues) {
+		return g.config.DPI.Enabled, mode
+	}
+	return true, dpiCaptureModeValues[idx]
 }
 
-func (g *guiState) setCaptureMode(mode string) {
-	for i, value := range dpiCaptureModeValues {
-		if value == mode {
-			g.syncingDPI = true
-			_ = g.dpiMode.SetCurrentIndex(i)
-			g.syncingDPI = false
-			return
+func (g *guiState) setDPIMode(enabled bool, mode string) {
+	index := dpiDisabledIndex
+	if enabled {
+		for i, value := range dpiCaptureModeValues {
+			if value == mode {
+				index = i
+				break
+			}
+		}
+		if index == dpiDisabledIndex {
+			index = 1
 		}
 	}
 	g.syncingDPI = true
-	_ = g.dpiMode.SetCurrentIndex(0)
+	_ = g.dpiMode.SetCurrentIndex(index)
 	g.syncingDPI = false
 }
 
@@ -159,22 +198,31 @@ func (g *guiState) changeCaptureMode() {
 	if g.syncingDPI || g.dpiMode == nil {
 		return
 	}
-	mode := g.captureModeValue()
-	g.config.DPI.CaptureMode = mode
-	cfg := g.config
-	if err := cfg.normalize(); err != nil {
+	enabled, mode := g.selectedDPIMode()
+	previous := g.config
+	candidate := g.config
+	candidate.DPI.Enabled = enabled
+	candidate.DPI.CaptureMode = mode
+	if err := candidate.normalize(); err != nil {
+		g.setDPIMode(previous.DPI.Enabled, previous.DPI.CaptureMode)
 		g.setStatus(err.Error(), true)
 		return
 	}
-	g.config = cfg
-	if err := SaveConfig(g.configPath, cfg); err != nil {
+	if err := SaveConfig(g.configPath, candidate); err != nil {
+		g.setDPIMode(previous.DPI.Enabled, previous.DPI.CaptureMode)
 		g.setStatus("DPI mode save failed: "+err.Error(), true)
 		return
 	}
+	g.config = candidate
 	if g.serviceKnown && g.service.Exists && g.service.State != svc.Stopped {
-		g.runAction("Applying DPI mode…", func() (string, error) {
+		g.runActionWithFailure("Applying DPI mode…", func() (string, error) {
 			return "DPI mode applied", restartService()
-		}, nil)
+		}, nil, func(err error) {
+			g.config = previous
+			_ = SaveConfig(g.configPath, previous)
+			g.setDPIMode(previous.DPI.Enabled, previous.DPI.CaptureMode)
+			g.setStatus("DPI mode apply failed: "+err.Error(), true)
+		})
 	} else {
 		g.setStatus("DPI mode saved", false)
 	}
@@ -213,18 +261,6 @@ func (g *guiState) onUI(f func()) {
 			f()
 		}
 	})
-}
-
-func (g *guiState) startServiceIfNeeded() {
-	state, err := queryServiceSnapshot()
-	if err != nil || !state.Exists || state.State != svc.Stopped {
-		return
-	}
-	if err := startInstalledService(); err != nil {
-		g.onUI(func() { g.setStatus("DNS service start failed: "+err.Error(), true) })
-		return
-	}
-	g.onUI(func() { g.setStatus("DNS service starting…", false) })
 }
 
 // Poll SCM independently of log reads. Pending transitions use a
@@ -343,9 +379,8 @@ func (g *guiState) updateActions() {
 	enabled := g.serviceKnown && !g.busy && !g.service.pending()
 	g.serviceButton.SetEnabled(enabled)
 	g.autoStart.SetEnabled(!g.busy)
-	g.checkButton.SetEnabled(!g.busy && !g.checking)
-	g.radioSonCMS.SetEnabled(!g.busy)
-	g.radioNextDNS.SetEnabled(!g.busy)
+	g.dpiMode.SetEnabled(!g.busy)
+	g.dnsProvider.SetEnabled(!g.busy)
 	if !g.service.Exists {
 		_ = g.serviceButton.SetText("Install && start")
 	} else if g.service.State == svc.Stopped {
@@ -370,12 +405,10 @@ func (g *guiState) setStatus(message string, failed bool) {
 
 func (g *guiState) switchProvider(provider string) {
 	upstream := PredefinedUpstream(provider)
-	g.config.Upstreams = []Upstream{upstream}
 	cfg := g.config
-	cfgPath := g.configPath
+	cfg.Upstreams = []Upstream{upstream}
 
 	go func() {
-		_ = SaveConfig(cfgPath, cfg)
 		res, err := callDNSIPC(dnsIPCRequest{
 			Op:        "set_upstream",
 			Upstreams: cfg.Upstreams,
@@ -397,18 +430,40 @@ func (g *guiState) toggleAutoStart() {
 		return
 	}
 	enable := g.autoStart.Checked()
-	g.config.ServiceAutoStart = enable
-	cfg := g.config
-	cfgPath := g.configPath
-
+	previous := g.config
+	candidate := g.config
+	candidate.ServiceAutoStart = enable
+	g.autoDirty = true
 	go func() {
-		_ = SaveConfig(cfgPath, cfg)
 		state, err := queryServiceSnapshot()
+		serviceChanged := false
 		if err == nil && state.Exists && state.StartType != serviceStartType(enable) {
-			_ = setServiceAutoStart(enable)
+			err = setServiceAutoStart(enable)
+			serviceChanged = err == nil
 		}
-		_ = syncGUIAutostart(enable)
+		if err == nil {
+			err = syncGUIAutostart(enable)
+		}
+		if err == nil {
+			err = SaveConfig(g.configPath, candidate)
+		}
+		if err != nil {
+			_ = syncGUIAutostart(previous.ServiceAutoStart)
+			if serviceChanged {
+				_ = setServiceAutoStart(previous.ServiceAutoStart)
+			}
+		}
 		g.onUI(func() {
+			g.autoDirty = false
+			if err != nil {
+				g.config = previous
+				g.syncingAutoStart = true
+				g.autoStart.SetChecked(previous.ServiceAutoStart)
+				g.syncingAutoStart = false
+				g.setStatus("Start with Windows update failed: "+err.Error(), true)
+				return
+			}
+			g.config = candidate
 			mode := "disabled"
 			if enable {
 				mode = "enabled"
@@ -421,13 +476,13 @@ func (g *guiState) toggleAutoStart() {
 func (g *guiState) editedConfig() (Config, error) {
 	c := g.config
 	provider := ProviderSonCMS
-	if g.radioNextDNS != nil && g.radioNextDNS.Checked() {
-		provider = ProviderNextDNS
+	if g.dnsProvider != nil {
+		provider = g.selectedDNSProvider()
 	}
 	c.Upstreams = []Upstream{PredefinedUpstream(provider)}
 	c.Interception = "windivert"
 	if g.dpiMode != nil {
-		c.DPI.CaptureMode = g.captureModeValue()
+		c.DPI.Enabled, c.DPI.CaptureMode = g.selectedDPIMode()
 	}
 	c.ServiceAutoStart = g.autoStart.Checked()
 	if err := c.normalize(); err != nil {
@@ -437,6 +492,10 @@ func (g *guiState) editedConfig() (Config, error) {
 }
 
 func (g *guiState) runAction(label string, work func() (string, error), done func()) {
+	g.runActionWithFailure(label, work, done, nil)
+}
+
+func (g *guiState) runActionWithFailure(label string, work func() (string, error), done func(), failed func(error)) {
 	if g.busy {
 		return
 	}
@@ -449,7 +508,11 @@ func (g *guiState) runAction(label string, work func() (string, error), done fun
 		g.onUI(func() {
 			g.busy = false
 			if err != nil {
-				g.setStatus(err.Error(), true)
+				if failed != nil {
+					failed(err)
+				} else {
+					g.setStatus(err.Error(), true)
+				}
 			} else {
 				if done != nil {
 					done()
@@ -519,48 +582,6 @@ func (g *guiState) uninstallService() {
 	g.runAction("Removing…", func() (string, error) {
 		return "Installation removed; SonDNS is ready to install again", uninstallService()
 	}, nil)
-}
-
-func (g *guiState) checkResolver() {
-	if g.checking {
-		return
-	}
-	c, err := g.editedConfig()
-	if err != nil {
-		g.setStatus(err.Error(), true)
-		return
-	}
-	g.checking = true
-	g.checkButton.SetEnabled(false)
-	g.setStatus("Checking…", false)
-	go func() {
-		started := time.Now()
-		c.Upstreams = c.Upstreams[:1]
-		r, err := NewResolver(c)
-		if err == nil {
-			defer func() {
-				for _, client := range r.clients {
-					client.http.CloseIdleConnections()
-				}
-			}()
-			msg := new(dns.Msg)
-			msg.SetQuestion("example.com.", dns.TypeA)
-			wire, _ := msg.Pack()
-			ctx, cancel := context.WithTimeout(g.ctx, c.Timeout)
-			defer cancel()
-			_, err = r.Resolve(ctx, wire)
-		}
-		g.onUI(func() {
-			g.checking = false
-			g.checkButton.SetEnabled(true)
-			if err != nil {
-				g.setStatus("Check failed: "+err.Error(), true)
-			} else {
-				provider := c.CurrentProvider()
-				g.setStatus(fmt.Sprintf("%s OK · %d ms", provider, time.Since(started).Milliseconds()), false)
-			}
-		})
-	}()
 }
 
 func (g *guiState) applyLogRows(rows []DNSRequestEntry, version uint64, instanceID string) {
@@ -877,15 +898,7 @@ func restoreMainWindow(hwnd win.HWND) {
 }
 
 func newAppIcon() (*walk.Icon, error) {
-	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{R: 37, G: 99, B: 235, A: 255}}, image.Point{}, draw.Src)
-	for y := 5; y < 27; y++ {
-		for x := 5; x < 27; x++ {
-			dx, dy := x-16, y-16
-			if dx*dx+dy*dy < 90 {
-				img.Set(x, y, color.RGBA{R: 186, G: 230, B: 253, A: 255})
-			}
-		}
-	}
-	return walk.NewIconFromImage(img)
+	// rsrc assigns ID 1 to the manifest and ID 2 to the first icon group.
+	// Load the same multi-resolution resource Explorer uses for the EXE.
+	return walk.NewIconFromResourceIdWithSize(2, walk.Size{Width: 16, Height: 16})
 }

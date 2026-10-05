@@ -49,7 +49,7 @@ type Interceptor struct {
 }
 
 func NewInterceptor(c Config, resolver *Resolver, logger *log.Logger) (*Interceptor, error) {
-	dir, err := resolveWinDivertDir()
+	dir, err := resolveWinDivertDir(logger)
 	if err != nil {
 		return nil, fmt.Errorf("prepare WinDivert: %w", err)
 	}
@@ -239,7 +239,7 @@ func (i *Interceptor) Shutdown() {
 	})
 }
 
-func resolveWinDivertDir() (string, error) {
+func resolveWinDivertDir(logger *log.Logger) (string, error) {
 	progData := os.Getenv("ProgramData")
 	if progData == "" {
 		return "", errors.New("ProgramData is unavailable; refusing to extract WinDivert runtime")
@@ -253,10 +253,10 @@ func resolveWinDivertDir() (string, error) {
 		sysPath := filepath.Join(appDir, "WinDivert64.sys")
 		// Always refresh the pair from the embedded build. This keeps the DNS
 		// interceptor and winws2 on the same WinDivert ABI after an upgrade.
-		if err := writeEmbeddedAsset(dllPath, embeddedWinDivertDLL, 0o755); err != nil {
+		if err := writeEmbeddedAsset(logger, "third_party/zapret2/WinDivert.dll", dllPath, embeddedWinDivertDLL, 0o755); err != nil {
 			return "", fmt.Errorf("extract WinDivert.dll: %w", err)
 		}
-		if err := writeEmbeddedAsset(sysPath, embeddedWinDivertSYS, 0o644); err != nil {
+		if err := writeEmbeddedAsset(logger, "third_party/zapret2/WinDivert64.sys", sysPath, embeddedWinDivertSYS, 0o644); err != nil {
 			return "", fmt.Errorf("extract WinDivert64.sys: %w", err)
 		}
 		return appDir, nil
@@ -264,13 +264,26 @@ func resolveWinDivertDir() (string, error) {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		if hasWinDivertFiles(exeDir) {
+			if err := verifyWinDivertFiles(exeDir); err != nil {
+				return "", fmt.Errorf("verify WinDivert in executable directory: %w", err)
+			}
 			return exeDir, nil
 		}
 	}
 	if hasWinDivertFiles(appDir) {
+		if err := verifyWinDivertFiles(appDir); err != nil {
+			return "", fmt.Errorf("verify WinDivert in ProgramData: %w", err)
+		}
 		return appDir, nil
 	}
 	return "", errors.New("missing WinDivert.dll and WinDivert64.sys")
+}
+
+func verifyWinDivertFiles(dir string) error {
+	if err := verifyRuntimeAssetFile("third_party/zapret2/WinDivert.dll", filepath.Join(dir, "WinDivert.dll")); err != nil {
+		return err
+	}
+	return verifyRuntimeAssetFile("third_party/zapret2/WinDivert64.sys", filepath.Join(dir, "WinDivert64.sys"))
 }
 
 func hasWinDivertFiles(dir string) bool {

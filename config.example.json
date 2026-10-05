@@ -2,7 +2,7 @@
   "listen": "127.0.0.1:5300",
   "interception": "windivert",
   "dpi_bypass": {
-    "enabled": true,
+    "enabled": false,
     "backend": "embedded-zapret2",
     "capture_mode": "default",
     "executable": "",

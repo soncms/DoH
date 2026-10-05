@@ -20,10 +20,23 @@ Cần Go 1.27.1 trên Windows amd64:
 ```powershell
 go test ./...
 go vet ./...
+.\scripts\verify-assets.ps1
 .\scripts\build.ps1
 ```
 
-Script tạo `SonDNS.exe` và nhúng manifest Common Controls 6, PerMonitorV2, asInvoker.
+Script tạo `SonDNS.exe` và nhúng manifest Common Controls 6, PerMonitorV2, asInvoker. Bản build thường giữ metadata của Go thay vì strip symbol để hỗ trợ phân tích và giảm tín hiệu heuristic không cần thiết.
+
+Khi phát hành, nên ký Authenticode bằng chứng thư của nhà phát hành và dùng timestamp server:
+
+```powershell
+$env:SONDNS_SIGN_CERT_THUMBPRINT = "THUMBPRINT_CERTIFICATE"
+$env:SONDNS_TIMESTAMP_URL = "http://timestamp.digicert.com"
+.\scripts\build.ps1 -Sign
+```
+
+Bản phát hành chính thức dùng `.\scripts\build.ps1 -Release`; lệnh này yêu cầu certificate và `signtool.exe`, rồi tạo `dist\SHA256SUMS` và `dist\build-info.json`. Build thường vẫn unsigned để phát triển, nhưng không được phát hành.
+
+`signtool.exe` (Windows SDK) và certificate phải có sẵn trong `Cert:\CurrentUser\My`. Không nên dùng UPX/packer, obfuscator hoặc hướng dẫn người dùng tắt Defender; các cách đó thường làm tăng cảnh báo và giảm độ tin cậy. Nếu Microsoft Defender vẫn nhận nhầm, gửi đúng file đã ký cùng mã phát hiện tại [Microsoft Security Intelligence file submission](https://www.microsoft.com/en-us/wdsi/filesubmission).
 
 ## Service và cấu hình
 
@@ -39,27 +52,27 @@ runtime/config/log tree under `%ProgramData%\SonDNS`, and deletes SonDNS backup
 executables next to the installed binary. The main `SonDNS.exe` and GUI stay in
 place so the service can be installed again immediately.
 
-GUI đọc cấu hình và thử khởi động service đã cài nếu đang dừng khi mở. Nếu chưa cài, dùng nút Install & start với quyền Administrator. Thay đổi DNS Server (SonCMS / NextDNS) được hot-swap qua IPC không cần restart. SonCMS dùng endpoint https://dns.soncms.net/dns-query/sondns. Start with Windows điều khiển autostart; WinDivert luôn bật khi service chạy.
+GUI chỉ đọc trạng thái khi mở, không tự khởi động service. Nếu chưa cài hoặc service đang dừng, dùng nút Install & start / Start với quyền Administrator. Menu DNS Server dùng cùng dropdown với DPI, gồm SonCMS và NextDNS; thay đổi lựa chọn được hot-swap qua IPC không cần restart. SonCMS dùng endpoint https://dns.soncms.net/dns-query/sondns. Menu DPI có Disabled, Default, TCP và TCP + QUIC UDP; Disabled tắt riêng zapret2 nhưng vẫn giữ WinDivert DNS interception. Start with Windows điều khiển cả service startup và GUI tray entry; Registry Run chỉ tồn tại khi tùy chọn này được bật.
 SonDNS dùng mutex riêng cho GUI và runtime: mở GUI lần hai sẽ tự kích hoạt cửa sổ hiện tại lên, còn một runtime thứ hai bị từ chối trước khi bind cổng DNS. Service Windows vốn đã được SCM giới hạn một instance.
 
 Các upstream hỗ trợ `https://`, `tls://`, `quic://`, `sdns://`. SonDNS không cache DNS local: mọi request đều được gửi tới upstream, kể cả query trùng nhau. Các trường cache trong cấu hình cũ được bỏ qua.
 
 ## Bypass DNS qua WinDivert
 
-`interception: "windivert"` là chế độ duy nhất và mặc định để bypass DNS của nhà mạng: WinDivert bắt IPv4/IPv6 UDP/53 ngoài loopback rồi chuyển query qua upstream mã hóa. Chế độ này cần Administrator. Driver `WinDivert.dll` và `WinDivert64.sys` đã được nhúng thẳng trong EXE và được giải phóng khi dừng. SonDNS không hỗ trợ tắt interception trong cấu hình hoặc giao diện.
+`interception: "windivert"` là chế độ duy nhất và mặc định để bypass DNS của nhà mạng: WinDivert bắt IPv4/IPv6 UDP/53 ngoài loopback rồi chuyển query qua upstream mã hóa. Chế độ này cần Administrator và vẫn hoạt động khi DPI bypass tắt. Driver `WinDivert.dll` và `WinDivert64.sys` đã được nhúng thẳng trong EXE, kiểm tra SHA-256 trước khi giải phóng và được dọn khi dừng. SonDNS không hỗ trợ tắt interception trong cấu hình hoặc giao diện.
 
 SonDNS không xử lý TCP/53, DoH/DoT trực tiếp của ứng dụng, mDNS/LLMNR hoặc DNS nằm trong tunnel VPN trong request log. Lưu lượng HTTP(S)/QUIC được xử lý bởi backend zapret2 tích hợp riêng.
 
 ## Bypass DPI tích hợp sẵn
 
-SonDNS tích hợp `winws2` của zapret2 cùng LuaJIT runtime, Lua strategy, filter và WinDivert. Tất cả được nhúng vào `SonDNS.exe`; lần chạy đầu service tự giải nén các asset vào `C:\ProgramData\SonDNS` rồi khởi động engine nội bộ. Máy đích không cần cài thêm helper hay copy thêm DLL.
+SonDNS tích hợp `winws2` của zapret2 cùng LuaJIT runtime, Lua strategy, filter và WinDivert. Các asset được nhúng vào `SonDNS.exe`, kiểm tra theo manifest SHA-256 và chỉ giải nén/chạy khi `dpi_bypass.enabled` là `true`. Máy đích không cần cài thêm helper hay copy thêm DLL.
 
 Trong `sondns.json`:
 
 ```json
 {
   "dpi_bypass": {
-    "enabled": true,
+    "enabled": false,
     "backend": "embedded-zapret2",
     "executable": "",
     "arguments": [],

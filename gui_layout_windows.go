@@ -93,23 +93,15 @@ func (g *guiState) build() error {
 		return err
 	}
 	_ = label.SetMinMaxSize(walk.Size{Width: 70, Height: 18}, walk.Size{Width: 70, Height: 18})
-	g.radioSonCMS, err = walk.NewRadioButton(dnsRow)
+	g.dnsProvider, err = walk.NewDropDownBox(dnsRow)
 	if err != nil {
 		return err
 	}
-	_ = g.radioSonCMS.SetText("SonCMS")
-	_ = g.radioSonCMS.SetMinMaxSize(walk.Size{Width: 80, Height: 24}, walk.Size{Width: 80, Height: 24})
-	g.radioNextDNS, err = walk.NewRadioButton(dnsRow)
-	if err != nil {
+	_ = g.dnsProvider.SetMinMaxSize(walk.Size{Width: 150, Height: 24}, walk.Size{Width: 150, Height: 24})
+	if err = g.dnsProvider.SetModel(&dnsProviderModel{}); err != nil {
 		return err
 	}
-	_ = g.radioNextDNS.SetText("NextDNS")
-	_ = g.radioNextDNS.SetMinMaxSize(walk.Size{Width: 85, Height: 24}, walk.Size{Width: 85, Height: 24})
-	_, _ = walk.NewHSpacer(dnsRow)
-	g.checkButton, err = uiButton(dnsRow, "Check", 64, 26, g.checkResolver)
-	if err != nil {
-		return err
-	}
+	g.dnsProvider.CurrentIndexChanged().Attach(g.changeDNSProvider)
 	dpiRow, err := uiRow(mw, 26)
 	if err != nil {
 		return err
@@ -123,7 +115,7 @@ func (g *guiState) build() error {
 	if err != nil {
 		return err
 	}
-	_ = g.dpiMode.SetMinMaxSize(walk.Size{Width: 125, Height: 24}, walk.Size{Width: 125, Height: 24})
+	_ = g.dpiMode.SetMinMaxSize(walk.Size{Width: 150, Height: 24}, walk.Size{Width: 150, Height: 24})
 	if err = g.dpiMode.SetModel(&dpiCaptureModeModel{}); err != nil {
 		return err
 	}

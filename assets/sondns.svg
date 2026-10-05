@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <title>SonDNS</title>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#307ff8"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="48" fill="url(#blue)"/>
+  <path d="M178 76 C164 61 145 53 123 53 C88 53 66 73 66 102 C66 126 82 139 117 149 C140 156 154 161 154 172 C154 183 143 190 127 190 C107 190 90 181 78 168 L56 192 C74 212 99 222 127 222 C165 222 189 201 189 170 C189 144 170 130 135 120 C112 114 101 109 101 99 C101 89 110 84 124 84 C141 84 154 91 167 103 Z" transform="translate(5 -9)" fill="#fff"/>
+</svg>
