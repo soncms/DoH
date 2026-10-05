@@ -10,10 +10,9 @@ import (
 )
 
 type serviceSnapshot struct {
-	Exists         bool
-	State          svc.State
-	StartType      uint32
-	BinaryPathName string
+	Exists    bool
+	State     svc.State
+	StartType uint32
 }
 
 func (s serviceSnapshot) autoStart() bool { return s.StartType == windows.SERVICE_AUTO_START }
@@ -84,7 +83,7 @@ func queryServiceSnapshot() (serviceSnapshot, error) {
 	if err != nil {
 		return serviceSnapshot{}, err
 	}
-	return serviceSnapshot{Exists: true, State: st.State, StartType: c.StartType, BinaryPathName: c.BinaryPathName}, nil
+	return serviceSnapshot{Exists: true, State: st.State, StartType: c.StartType}, nil
 }
 
 func serviceStartType(auto bool) uint32 {

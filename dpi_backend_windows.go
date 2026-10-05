@@ -28,8 +28,6 @@ type DPIBackend struct {
 	stop    chan struct{}
 	done    chan struct{}
 	stopOne sync.Once
-	running bool
-	lastErr string
 }
 
 func NewDPIBackend(c Config, logger *log.Logger) (*DPIBackend, error) {
@@ -48,10 +46,6 @@ func (b *DPIBackend) Start() error {
 	}
 	exe, args, err := b.command()
 	if err != nil {
-		b.mu.Lock()
-		b.lastErr = err.Error()
-		b.running = false
-		b.mu.Unlock()
 		b.logger.Printf("DPI backend unavailable: %v; continuing in fail-open mode", err)
 		return nil
 	}
@@ -93,24 +87,11 @@ func (b *DPIBackend) run(exe string, args []string) {
 
 		b.logger.Printf("starting DPI backend %q", exe)
 		err := cmd.Start()
-		b.mu.Lock()
-		if err == nil {
-			b.running = true
-			b.lastErr = ""
-		} else {
-			b.running = false
-			b.lastErr = err.Error()
-		}
-		b.mu.Unlock()
 		if err == nil {
 			err = cmd.Wait()
 		}
 		b.mu.Lock()
 		b.cmd = nil
-		b.running = false
-		if err != nil {
-			b.lastErr = err.Error()
-		}
 		b.mu.Unlock()
 
 		select {
@@ -149,25 +130,12 @@ func (b *DPIBackend) Shutdown() {
 				b.logger.Printf("stop DPI backend: %v", err)
 			}
 		}
-		b.mu.Lock()
-		b.running = false
-		b.mu.Unlock()
 		select {
 		case <-b.done:
 		case <-time.After(5 * time.Second):
 			b.logger.Printf("timed out waiting for DPI backend")
 		}
 	})
-}
-
-func (b *DPIBackend) Status() (bool, string) {
-	if b == nil {
-		return false, ""
-	}
-	b.mu.Lock()
-	running, lastErr := b.running, b.lastErr
-	b.mu.Unlock()
-	return running, lastErr
 }
 
 func ensureEmbeddedZapret2(logger *log.Logger) (string, error) {

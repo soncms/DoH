@@ -1,16 +1,7 @@
 # Third-party notices
 
-## IVPN Desktop UI source
-
-SonDNS's Electron/Vue shell, SCSS tokens, fonts and selected controls are
-ported from `ivpn/desktop-app` at commit
-`07e24591a999c6e9974ae19b795d22465fdcf89d`. IVPN Desktop is copyright IVPN
-Limited and contributors and is licensed under GPLv3-or-later. The port keeps
-the original source notices; SonDNS replaces all VPN/account bindings with the
-SonDNS IPC adapter. Source: https://github.com/ivpn/desktop-app.
-
-SonDNS.Service.exe embeds a small Windows runtime bundle so the distributed
-service does not require a separate helper installation.
+SonDNS embeds a small Windows runtime bundle so the distributed `SonDNS.exe`
+does not require a separate helper installation.
 
 ## zapret2 / winws2
 

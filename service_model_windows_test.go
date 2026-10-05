@@ -16,11 +16,11 @@ func TestServiceStateTransitions(t *testing.T) {
 		pending bool
 	}{
 		{serviceSnapshot{}, "not installed", false},
-		{serviceSnapshot{Exists: true, State: svc.StartPending, StartType: windows.SERVICE_AUTO_START}, "starting", true},
-		{serviceSnapshot{Exists: true, State: svc.Running, StartType: windows.SERVICE_AUTO_START}, "running · automatic", false},
-		{serviceSnapshot{Exists: true, State: svc.Running, StartType: windows.SERVICE_DEMAND_START}, "running · manual", false},
-		{serviceSnapshot{Exists: true, State: svc.StopPending, StartType: windows.SERVICE_AUTO_START}, "stopping", true},
-		{serviceSnapshot{Exists: true, State: svc.Stopped, StartType: windows.SERVICE_AUTO_START}, "stopped", false},
+		{serviceSnapshot{true, svc.StartPending, windows.SERVICE_AUTO_START}, "starting", true},
+		{serviceSnapshot{true, svc.Running, windows.SERVICE_AUTO_START}, "running · automatic", false},
+		{serviceSnapshot{true, svc.Running, windows.SERVICE_DEMAND_START}, "running · manual", false},
+		{serviceSnapshot{true, svc.StopPending, windows.SERVICE_AUTO_START}, "stopping", true},
+		{serviceSnapshot{true, svc.Stopped, windows.SERVICE_AUTO_START}, "stopped", false},
 	}
 	for _, tt := range tests {
 		if tt.s.text() != tt.text || tt.s.pending() != tt.pending {

@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -22,8 +20,6 @@ import (
 )
 
 const serviceName = "SonDNS"
-
-var buildVersion = "dev"
 
 func main() {
 	if runtime.GOOS != "windows" {
@@ -51,10 +47,17 @@ func main() {
 
 func cli(args []string) error {
 	if len(args) == 0 {
-		usage()
-		return errors.New("a service command is required; launch SonDNS.exe for the graphical interface")
+		return runGUI()
 	}
 	switch args[0] {
+	case "gui":
+		fs := flag.NewFlagSet("gui", flag.ContinueOnError)
+		config := fs.String("config", defaultConfigPath(), "path to JSON config")
+		tray := fs.Bool("tray", false, "start minimized in system tray")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return runGUIWithConfigAndTray(*config, *tray)
 	case "run":
 		fs := flag.NewFlagSet("run", flag.ContinueOnError)
 		config := fs.String("config", defaultConfigPath(), "path to JSON config")
@@ -74,33 +77,8 @@ func cli(args []string) error {
 	case "uninstall":
 		return uninstallService()
 	case "stop":
-		return runPrivileged(func() error { return stopService() })
-	case "start":
-		return runPrivileged(func() error { return startInstalledService() })
-	case "restart":
-		return runPrivileged(func() error { return restartService() })
-	case "autostart":
-		fs := flag.NewFlagSet("autostart", flag.ContinueOnError)
-		config := fs.String("config", defaultConfigPath(), "path to JSON config")
-		enable := fs.Bool("enable", false, "enable start with Windows")
-		disable := fs.Bool("disable", false, "disable start with Windows")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *enable == *disable {
-			return errors.New("autostart requires exactly one of --enable or --disable")
-		}
-		return runPrivileged(func() error { return setAutostart(*config, *enable) })
+		return stopService()
 	case "status":
-		jsonOutput := false
-		for _, arg := range args[1:] {
-			if arg == "--json" {
-				jsonOutput = true
-			}
-		}
-		if jsonOutput {
-			return serviceStatusJSON()
-		}
 		return serviceStatus()
 	default:
 		usage()
@@ -116,11 +94,8 @@ Commands:
   run        run in the foreground
   install    install and start (service_auto_start controls startup)
   stop       stop the Windows service without removing it
-  start      start an installed Windows service
-  restart    restart the Windows service
-  autostart  atomically update service and UI start with Windows (--enable/--disable)
   uninstall  stop and remove the service
-  status     show service status (use --json for machine-readable output)
+  status     show service status
 
 Examples:
   SonDNS init --config C:\ProgramData\SonDNS\sondns.json
@@ -146,7 +121,7 @@ func runForeground(path string) error {
 		return err
 	}
 	defer closeLog()
-	shutdown, err := startRuntime(c, logger, path)
+	shutdown, err := startRuntime(c, logger)
 	if err != nil {
 		return err
 	}
@@ -161,7 +136,7 @@ func runForeground(path string) error {
 	return nil
 }
 
-func startRuntime(c Config, logger *log.Logger, configPath string) (func(), error) {
+func startRuntime(c Config, logger *log.Logger) (func(), error) {
 	instance, acquired, err := acquireProcessMutex("Global\\SonDNS.Runtime")
 	if err != nil {
 		return nil, err
@@ -174,7 +149,6 @@ func startRuntime(c Config, logger *log.Logger, configPath string) (func(), erro
 		instance.Close()
 		return nil, err
 	}
-	engine.setConfigPath(configPath)
 	if err := engine.Start(context.Background()); err != nil {
 		instance.Close()
 		return nil, err
@@ -203,7 +177,6 @@ func startRuntime(c Config, logger *log.Logger, configPath string) (func(), erro
 		instance.Close()
 		return nil, err
 	}
-	engine.setDPIBackend(dpi)
 	if dpi != nil {
 		if err := dpi.Start(); err != nil {
 			dpi.Shutdown()
@@ -219,7 +192,6 @@ func startRuntime(c Config, logger *log.Logger, configPath string) (func(), erro
 		if dpi != nil {
 			dpi.Shutdown()
 		}
-		engine.setDPIBackend(nil)
 		if interceptor != nil {
 			interceptor.Shutdown()
 		}
@@ -262,7 +234,7 @@ func (d *windowsService) Execute(_ []string, req <-chan svc.ChangeRequest, statu
 	checkpoint := uint32(1)
 	deadline := time.Now().Add(45 * time.Second)
 	for {
-		shutdown, err = startRuntime(c, logger, d.configPath)
+		shutdown, err = startRuntime(c, logger)
 		if err == nil {
 			break
 		}
@@ -299,16 +271,21 @@ func (d *windowsService) Execute(_ []string, req <-chan svc.ChangeRequest, statu
 }
 
 func installService(args []string) error {
-	return runPrivileged(func() error { return installServiceElevated(args) })
-}
-
-func installServiceElevated(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	config := fs.String("config", defaultConfigPath(), "path to JSON config")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if _, err := os.Stat(*config); errors.Is(err, os.ErrNotExist) {
+		if err := SaveConfig(*config, DefaultConfig()); err != nil {
+			return err
+		}
+	}
 	path, err := filepath.Abs(*config)
+	if err != nil {
+		return err
+	}
+	settings, err := LoadConfig(path)
 	if err != nil {
 		return err
 	}
@@ -323,22 +300,10 @@ func installServiceElevated(args []string) error {
 	defer m.Disconnect()
 	existing, err := m.OpenService(serviceName)
 	if err == nil {
-		settings, settingsErr := LoadConfig(path)
-		if settingsErr != nil {
-			settings = DefaultConfig()
-		}
-		return migrateExistingService(existing, path, settings, exe)
+		existing.Close()
+		return errors.New("service already exists; run uninstall first")
 	}
 	if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-		return err
-	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := SaveConfig(path, DefaultConfig()); err != nil {
-			return err
-		}
-	}
-	settings, err := LoadConfig(path)
-	if err != nil {
 		return err
 	}
 	c := mgr.Config{
@@ -355,134 +320,14 @@ func installServiceElevated(args []string) error {
 		return err
 	}
 	defer s.Close()
-	oldRegistry, oldRegistryPresent, err := readGUIAutostart()
-	if err != nil {
-		_ = s.Delete()
-		return err
-	}
-	if err := syncGUIAutostart(settings.ServiceAutoStart); err != nil {
-		_ = s.Delete()
-		return fmt.Errorf("update SonDNS tray autostart: %w", err)
-	}
+	_ = syncGUIAutostart(settings.ServiceAutoStart)
 	if err := s.Start(); err != nil {
-		_ = writeGUIAutostart(oldRegistry, oldRegistryPresent)
-		_ = s.Delete()
 		return fmt.Errorf("service installed but failed to start: %w", err)
 	}
 	return nil
 }
 
-// migrateExistingService upgrades the service in place so installing a new
-// build does not discard the user's config, log, or SCM settings. The service
-// object remains named SonDNS, which keeps existing SCM registrations and
-// scheduled starts compatible with older releases.
-func migrateExistingService(s *mgr.Service, configPath string, settings Config, newExe string) error {
-	defer s.Close()
-	oldConfig, err := s.Config()
-	if err != nil {
-		return err
-	}
-	oldCommand := oldConfig.BinaryPathName
-	oldConfigPath := serviceConfigPath(oldCommand)
-	if oldConfigPath == "" {
-		oldConfigPath = configPath
-	}
-	if legacySettings, loadErr := LoadConfig(oldConfigPath); loadErr == nil {
-		settings = legacySettings
-	}
-	if _, err := os.Stat(oldConfigPath); err != nil {
-		return fmt.Errorf("legacy service config %s is unavailable: %w", oldConfigPath, err)
-	}
-	backupPath := fmt.Sprintf("%s.backup-%s", oldConfigPath, time.Now().Format("20060102-150405"))
-	if err := copyFile(oldConfigPath, backupPath); err != nil {
-		return fmt.Errorf("backup legacy config: %w", err)
-	}
-
-	status, err := s.Query()
-	if err != nil {
-		return err
-	}
-	oldRegistry, oldRegistryPresent, err := readGUIAutostart()
-	if err != nil {
-		return err
-	}
-	wasRunning := status.State != svc.Stopped
-	if wasRunning {
-		if _, err := s.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
-			return err
-		}
-		if err := waitForServiceStopped(s, 15*time.Second); err != nil {
-			return err
-		}
-	}
-
-	newConfig := oldConfig
-	newConfig.BinaryPathName = quoteWindowsArgument(newExe) + " run --config=" + quoteWindowsArgument(oldConfigPath)
-	newConfig.StartType = serviceStartType(settings.ServiceAutoStart)
-	rollback := func() {
-		_ = s.UpdateConfig(oldConfig)
-		_ = writeGUIAutostart(oldRegistry, oldRegistryPresent)
-		if wasRunning {
-			_ = s.Start()
-		}
-	}
-	if err := s.UpdateConfig(newConfig); err != nil {
-		rollback()
-		return fmt.Errorf("update service binary path: %w", err)
-	}
-	if err := syncGUIAutostart(settings.ServiceAutoStart); err != nil {
-		rollback()
-		return fmt.Errorf("update SonDNS tray autostart: %w", err)
-	}
-	if err := s.Start(); err != nil {
-		rollback()
-		return fmt.Errorf("start migrated service: %w", err)
-	}
-	return nil
-}
-
-func serviceConfigPath(commandLine string) string {
-	args, err := windows.DecomposeCommandLine(commandLine)
-	if err != nil {
-		return ""
-	}
-	for i, arg := range args {
-		if strings.HasPrefix(strings.ToLower(arg), "--config=") {
-			return strings.Trim(strings.TrimSpace(arg[len("--config="):]), `"`)
-		}
-		if strings.EqualFold(arg, "--config") && i+1 < len(args) {
-			return strings.Trim(strings.TrimSpace(args[i+1]), `"`)
-		}
-	}
-	return ""
-}
-
-func copyFile(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
-}
-
 func uninstallService() error {
-	return runPrivileged(uninstallServiceElevated)
-}
-
-func uninstallServiceElevated() error {
 	m, err := mgr.Connect()
 	if err != nil {
 		return err
@@ -562,8 +407,7 @@ func purgeSonDNSInstall(installedExe string) error {
 	if err != nil {
 		return err
 	}
-	baseName := filepath.Base(installedExe)
-	if !strings.EqualFold(baseName, "SonDNS.Service.exe") && !strings.EqualFold(baseName, "SonDNS.exe") {
+	if !strings.EqualFold(filepath.Base(installedExe), "SonDNS.exe") {
 		return nil
 	}
 	dir := filepath.Dir(installedExe)
@@ -576,8 +420,7 @@ func purgeSonDNSInstall(installedExe string) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, "SonDNS.Service.exe.bak-") || strings.HasPrefix(name, "SonDNS.Service.exe.backup-") || name == "SonDNS.Service.exe~" ||
-			strings.HasPrefix(name, "SonDNS.exe.bak-") || strings.HasPrefix(name, "SonDNS.exe.backup-") || name == "SonDNS.exe~" {
+		if strings.HasPrefix(name, "SonDNS.exe.bak-") || strings.HasPrefix(name, "SonDNS.exe.backup-") || name == "SonDNS.exe~" {
 			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
@@ -593,80 +436,6 @@ func serviceStatus() error {
 	}
 	fmt.Println(st.State)
 	return nil
-}
-
-func serviceStatusJSON() error {
-	snapshot, err := queryServiceSnapshot()
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(os.Stdout).Encode(struct {
-		Exists         bool   `json:"exists"`
-		State          string `json:"state"`
-		StartType      uint32 `json:"start_type"`
-		AutoStart      bool   `json:"auto_start"`
-		BinaryPathName string `json:"binary_path"`
-	}{
-		Exists:         snapshot.Exists,
-		State:          serviceStateName(snapshot.State),
-		StartType:      snapshot.StartType,
-		AutoStart:      snapshot.autoStart(),
-		BinaryPathName: snapshot.BinaryPathName,
-	})
-}
-
-func setAutostart(configPath string, enable bool) error {
-	oldConfig, err := LoadConfig(configPath)
-	if err != nil {
-		return err
-	}
-	oldRegistry, oldRegistryPresent, err := readGUIAutostart()
-	if err != nil {
-		return err
-	}
-	snapshot, serviceErr := queryServiceSnapshot()
-	servicePresent := serviceErr == nil && snapshot.Exists
-	if serviceErr != nil && !errors.Is(serviceErr, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
-		return serviceErr
-	}
-	if servicePresent {
-		if err := setServiceAutoStart(enable); err != nil {
-			return err
-		}
-	}
-	if err := syncGUIAutostart(enable); err != nil {
-		if servicePresent {
-			_ = setServiceAutoStart(snapshot.autoStart())
-		}
-		return err
-	}
-	updated := oldConfig
-	updated.ServiceAutoStart = enable
-	if err := SaveConfig(configPath, updated); err != nil {
-		_ = writeGUIAutostart(oldRegistry, oldRegistryPresent)
-		if servicePresent {
-			_ = setServiceAutoStart(snapshot.autoStart())
-		}
-		return err
-	}
-	return nil
-}
-
-func serviceStateName(state svc.State) string {
-	switch state {
-	case svc.StartPending:
-		return "start_pending"
-	case svc.StopPending:
-		return "stop_pending"
-	case svc.Running:
-		return "running"
-	case svc.Stopped:
-		return "stopped"
-	case svc.Paused:
-		return "paused"
-	default:
-		return "unknown"
-	}
 }
 
 func getServiceStatus() (svc.Status, error) {

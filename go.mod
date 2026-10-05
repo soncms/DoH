@@ -5,6 +5,8 @@ go 1.27.1
 require (
 	github.com/AdguardTeam/dnsproxy v0.84.2
 	github.com/ameshkov/dnsstamps v1.0.3
+	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
+	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
 	github.com/miekg/dns v1.1.73
 	golang.org/x/sys v0.48.0
 )
@@ -21,4 +23,7 @@ require (
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
+	gopkg.in/Knetic/govaluate.v3 v3.0.0 // indirect
 )
+
+replace github.com/lxn/walk => ./third_party/walk
