@@ -179,6 +179,9 @@ func TestNativeLayout(t *testing.T) {
 			}
 		}
 		visit(mw)
+		if got, want := g.dnsProvider.Bounds().X, g.dpiMode.Bounds().X; got != want {
+			t.Errorf("selector alignment: DNS x=%d, DPI x=%d", got, want)
+		}
 		g.resizeLogColumns()
 		columnWidth := 0
 		for i := 0; i < g.requestLog.Columns().Len(); i++ {

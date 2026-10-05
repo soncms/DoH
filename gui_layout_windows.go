@@ -102,6 +102,7 @@ func (g *guiState) build() error {
 		return err
 	}
 	g.dnsProvider.CurrentIndexChanged().Attach(g.changeDNSProvider)
+	_, _ = walk.NewHSpacer(dnsRow)
 	dpiRow, err := uiRow(mw, 26)
 	if err != nil {
 		return err
