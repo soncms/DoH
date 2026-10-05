@@ -88,7 +88,7 @@ function loadUIState() {
   try {
     return JSON.parse(readFileSync(uiStatePath, "utf8"));
   } catch {
-    return { theme: "system", language: "en", closeToTray: true, lastRoute: "/", bounds: { width: 472, height: 742 } };
+    return { theme: "system", language: "en", closeToTray: true, lastRoute: "/", bounds: { width: 760, height: 520 } };
   }
 }
 
@@ -128,16 +128,16 @@ function nativeImageFallback() {
 }
 
 function createWindow(state) {
-  const bounds = state?.bounds || { width: 472, height: 742 };
+  const bounds = state?.bounds || { width: 760, height: 520 };
   mainWindow = new BrowserWindow({
-    width: bounds.width || 472,
-    height: bounds.height || 742,
+    width: bounds.width || 760,
+    height: bounds.height || 520,
     x: Number.isFinite(bounds.x) ? bounds.x : undefined,
     y: Number.isFinite(bounds.y) ? bounds.y : undefined,
-    minWidth: 420,
-    minHeight: 640,
-    maxWidth: 620,
-    maxHeight: 960,
+    minWidth: 660,
+    minHeight: 460,
+    maxWidth: 1000,
+    maxHeight: 760,
     resizable: true,
     frame: false,
     show: false,
