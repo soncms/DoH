@@ -4,7 +4,7 @@
       <div class="sondns-card-title">Service</div>
       <div class="sondns-row"><div><div class="sondns-label">Start with Windows</div><span class="sondns-help">Updates SCM startup and the SonDNS tray entry together.</span></div><button class="sondns-switch" :class="{ on: autoStart }" role="switch" :aria-checked="autoStart" @click="toggleAutostart"></button></div>
       <div class="sondns-row"><span class="sondns-label">Current state</span><span class="sondns-muted">{{ serviceState }}</span></div>
-      <div class="sondns-actions" style="justify-content:flex-start"><button class="sondns-button secondary" @click="action('restart')">Restart</button><button class="sondns-button secondary" @click="action('stop')">Stop</button><button v-if="!exists" class="sondns-button" @click="action('install')">Install & start</button></div>
+      <div class="sondns-actions" style="justify-content:flex-start"><button class="sondns-button secondary" @click="action('restart')">Restart</button><button class="sondns-button secondary" @click="action('stop')">Stop</button><button v-if="!exists || needsMigration" class="sondns-button" @click="action('install')">{{ needsMigration ? "Migrate service" : "Install & start" }}</button></div>
     </div>
     <div class="sondns-card">
       <div class="sondns-card-title">Appearance</div>
@@ -31,6 +31,7 @@ import { useStore } from "vuex";
 const store = useStore();
 const autoStart = computed(() => !!store.state.service.auto_start);
 const exists = computed(() => !!store.state.service.exists);
+const needsMigration = computed(() => exists.value && !/SonDNS\.Service\.exe/i.test(store.state.service.binary_path || ""));
 const serviceState = computed(() => store.state.service.state || "unknown");
 const theme = computed(() => store.state.ui.theme || "system");
 const language = computed(() => store.state.ui.language || "en");

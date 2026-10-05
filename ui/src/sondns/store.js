@@ -6,7 +6,7 @@ const initialUI = { theme: "system", language: "en", closeToTray: true, lastRout
 export default createStore({
   strict: true,
   state: {
-    service: { exists: false, state: "unknown", auto_start: false },
+    service: { exists: false, state: "unknown", auto_start: false, binary_path: "" },
     coreState: null,
     config: null,
     diagnostics: null,
@@ -48,7 +48,7 @@ export default createStore({
       commit("setLoading", true);
       const [ui, serviceResult, stateResult, configResult, diagnosticsResult, logResult] = await Promise.all([
         getUIState().catch(() => initialUI),
-        service("status", ["--json"]).catch(() => ({ exists: false, state: "unknown", auto_start: false })),
+        service("status", ["--json"]).catch(() => ({ exists: false, state: "unknown", auto_start: false, binary_path: "" })),
         request("get_state").catch(() => null),
         request("get_config").catch(() => null),
         request("diagnostics").catch(() => null),

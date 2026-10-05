@@ -601,15 +601,17 @@ func serviceStatusJSON() error {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(struct {
-		Exists    bool   `json:"exists"`
-		State     string `json:"state"`
-		StartType uint32 `json:"start_type"`
-		AutoStart bool   `json:"auto_start"`
+		Exists         bool   `json:"exists"`
+		State          string `json:"state"`
+		StartType      uint32 `json:"start_type"`
+		AutoStart      bool   `json:"auto_start"`
+		BinaryPathName string `json:"binary_path"`
 	}{
-		Exists:    snapshot.Exists,
-		State:     serviceStateName(snapshot.State),
-		StartType: snapshot.StartType,
-		AutoStart: snapshot.autoStart(),
+		Exists:         snapshot.Exists,
+		State:          serviceStateName(snapshot.State),
+		StartType:      snapshot.StartType,
+		AutoStart:      snapshot.autoStart(),
+		BinaryPathName: snapshot.BinaryPathName,
 	})
 }
 
