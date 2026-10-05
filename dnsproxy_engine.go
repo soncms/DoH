@@ -24,6 +24,10 @@ type DNSProxyEngine struct {
 	requests     *DNSRequestRing
 	upstreams    *dnsproxy.UpstreamConfig
 	ipc          *dnsIPCServer
+	config       Config
+	configPath   string
+	dpi          *DPIBackend
+	startedAt    time.Time
 	timeout      time.Duration
 	bootstrapDNS []string
 	mu           sync.RWMutex
@@ -96,7 +100,117 @@ func (e *DNSProxyEngine) SetUpstreams(items []Upstream) error {
 		return err
 	}
 	e.replaceUpstreams(newConf)
+	e.mu.Lock()
+	e.config.Upstreams = append([]Upstream(nil), items...)
+	e.mu.Unlock()
 	return nil
+}
+
+func (e *DNSProxyEngine) setConfigPath(path string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.configPath = path
+	e.mu.Unlock()
+}
+
+func (e *DNSProxyEngine) configSnapshot() Config {
+	if e == nil {
+		return DefaultConfig()
+	}
+	e.mu.RLock()
+	c := e.config
+	c.Upstreams = append([]Upstream(nil), e.config.Upstreams...)
+	c.BootstrapDNS = append([]string(nil), e.config.BootstrapDNS...)
+	c.DPI.Targets = append([]string(nil), e.config.DPI.Targets...)
+	c.DPI.Exclude = append([]string(nil), e.config.DPI.Exclude...)
+	c.DPI.Arguments = append([]string(nil), e.config.DPI.Arguments...)
+	e.mu.RUnlock()
+	return c
+}
+
+func (e *DNSProxyEngine) setConfig(c Config) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.config = c
+	e.mu.Unlock()
+}
+
+func (e *DNSProxyEngine) setDPIBackend(backend *DPIBackend) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.dpi = backend
+	e.mu.Unlock()
+}
+
+func (e *DNSProxyEngine) persistConfig() error {
+	if e == nil {
+		return errors.New("engine not initialized")
+	}
+	e.mu.RLock()
+	path := e.configPath
+	c := e.config
+	e.mu.RUnlock()
+	if path == "" {
+		return nil
+	}
+	return SaveConfig(path, c)
+}
+
+func (e *DNSProxyEngine) ipcState() *dnsIPCState {
+	if e == nil {
+		return &dnsIPCState{}
+	}
+	c := e.configSnapshot()
+	e.mu.RLock()
+	started, startedAt := e.started, e.startedAt
+	e.mu.RUnlock()
+	state := &dnsIPCState{
+		DNSRunning:  started,
+		DPIRunning:  c.DPI.Enabled,
+		DPIEnabled:  c.DPI.Enabled,
+		CaptureMode: c.DPI.CaptureMode,
+		Provider:    c.CurrentProvider(),
+	}
+	e.mu.RLock()
+	dpi := e.dpi
+	e.mu.RUnlock()
+	if dpi != nil {
+		state.DPIRunning, state.LastError = dpi.Status()
+	}
+	assets := runtimeAssetDiagnostics()
+	state.AssetVerified = len(assets) > 0
+	for _, asset := range assets {
+		if !asset.Verified {
+			state.AssetVerified = false
+			if state.AssetError == "" {
+				state.AssetError = fmt.Sprintf("%s expected %s got %s", asset.Name, asset.Expected, asset.Actual)
+				if asset.Error != "" {
+					state.AssetError += ": " + asset.Error
+				}
+			}
+		}
+	}
+	if !startedAt.IsZero() {
+		state.UptimeSeconds = int64(time.Since(startedAt).Seconds())
+	}
+	return state
+}
+
+func (e *DNSProxyEngine) ipcConfig() *dnsIPCConfig {
+	c := e.configSnapshot()
+	return &dnsIPCConfig{
+		Provider:         c.CurrentProvider(),
+		Upstreams:        c.Upstreams,
+		DPIEnabled:       c.DPI.Enabled,
+		CaptureMode:      c.DPI.CaptureMode,
+		ServiceAutoStart: c.ServiceAutoStart,
+	}
 }
 
 func (e *DNSProxyEngine) replaceUpstreams(newConf *dnsproxy.UpstreamConfig) {
@@ -135,6 +249,7 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 	ring := NewDNSRequestRing()
 	engine := &DNSProxyEngine{
 		logger: logger, requests: ring, upstreams: upstreams,
+		config:  c,
 		timeout: c.Timeout, bootstrapDNS: c.BootstrapDNS,
 	}
 	engineProxy, err := dnsproxy.New(&dnsproxy.Config{
@@ -428,8 +543,12 @@ func (e *DNSProxyEngine) Start(ctx context.Context) error {
 		_ = e.upstreams.Close()
 		return err
 	}
+	e.mu.Lock()
 	e.started = true
+	e.startedAt = time.Now()
+	e.mu.Unlock()
 	e.ipc = newDNSIPCServer(e.requests, e)
+	e.ipc.engine = e
 	e.ipc.start()
 	return nil
 }
@@ -441,7 +560,11 @@ func (e *DNSProxyEngine) Shutdown(ctx context.Context) error {
 	if e.ipc != nil {
 		e.ipc.close()
 	}
-	return e.proxy.Shutdown(ctx)
+	err := e.proxy.Shutdown(ctx)
+	e.mu.Lock()
+	e.started = false
+	e.mu.Unlock()
+	return err
 }
 
 type slogWriter struct{ logger *log.Logger }

@@ -116,3 +116,31 @@ func TestDNSIPCSnapshotVersionSkip(t *testing.T) {
 		t.Fatalf("clear must return a changed, empty snapshot: %+v", resp)
 	}
 }
+
+func TestDNSIPCSchemaV3ControlOperations(t *testing.T) {
+	configPath := t.TempDir() + `\sondns.json`
+	engine := &DNSProxyEngine{config: DefaultConfig(), configPath: configPath, startedAt: time.Now()}
+	server := newDNSIPCServer(NewDNSRequestRing(), nil)
+	server.engine = engine
+	state := server.respond(dnsIPCRequest{Op: "get_state"})
+	if !state.OK || state.SchemaVersion != 3 || state.State == nil {
+		t.Fatalf("get_state response: %+v", state)
+	}
+	config := server.respond(dnsIPCRequest{Op: "get_config"})
+	if !config.OK || config.Config == nil || config.Config.Provider != ProviderSonCMS {
+		t.Fatalf("get_config response: %+v", config)
+	}
+	dpi := server.respond(dnsIPCRequest{Op: "set_dpi", Enabled: boolPtr(true), CaptureMode: "tcp+udp"})
+	if !dpi.OK || !dpi.NeedsRestart || !engine.config.DPI.Enabled || engine.config.DPI.CaptureMode != "tcp+udp" {
+		t.Fatalf("set_dpi response: %+v config=%+v", dpi, engine.config)
+	}
+	if _, err := LoadConfig(configPath); err != nil {
+		t.Fatalf("set_dpi did not persist config: %v", err)
+	}
+	bad := server.respond(dnsIPCRequest{Op: "unknown"})
+	if bad.OK || bad.Code != "UNKNOWN_OPERATION" || bad.SchemaVersion != 3 {
+		t.Fatalf("unknown operation response: %+v", bad)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }

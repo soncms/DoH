@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -26,6 +27,67 @@ var (
 )
 
 var errRuntimeAssetHashMismatch = errors.New("runtime asset hash mismatch")
+
+type runtimeAssetDiagnostic struct {
+	Name     string `json:"name"`
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
+	Verified bool   `json:"verified"`
+	Error    string `json:"error,omitempty"`
+}
+
+func runtimeAssetData(name string) []byte {
+	switch name {
+	case "third_party/zapret2/WinDivert.dll":
+		return embeddedWinDivertDLL
+	case "third_party/zapret2/WinDivert64.sys":
+		return embeddedWinDivertSYS
+	case "third_party/zapret2/winws2.exe":
+		return embeddedZapret2WinWS
+	case "third_party/zapret2/cygwin1.dll":
+		return embeddedZapret2Cygwin
+	case "third_party/zapret2/lua/zapret-lib.lua":
+		return embeddedZapret2LibLua
+	case "third_party/zapret2/lua/zapret-antidpi.lua":
+		return embeddedZapret2AntiDPILua
+	case "third_party/zapret2/windivert.filter/windivert_part.discord_media.txt":
+		return embeddedZapret2DiscordFilter
+	case "third_party/zapret2/windivert.filter/windivert_part.stun.txt":
+		return embeddedZapret2STUNFilter
+	case "third_party/zapret2/windivert.filter/windivert_part.wireguard.txt":
+		return embeddedZapret2WireguardFilter
+	case "third_party/zapret2/windivert.filter/windivert_part.quic_initial_ietf.txt":
+		return embeddedZapret2QUICFilter
+	default:
+		return nil
+	}
+}
+
+func runtimeAssetDiagnostics() []runtimeAssetDiagnostic {
+	pins, err := loadRuntimeAssetPins()
+	if err != nil {
+		return []runtimeAssetDiagnostic{{Name: "manifest", Error: err.Error()}}
+	}
+	names := make([]string, 0, len(pins))
+	for name := range pins {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]runtimeAssetDiagnostic, 0, len(names))
+	for _, name := range names {
+		data := runtimeAssetData(name)
+		actual := ""
+		if data != nil {
+			actual = runtimeAssetHash(data)
+		}
+		item := runtimeAssetDiagnostic{Name: name, Expected: pins[name], Actual: actual, Verified: actual != "" && actual == pins[name]}
+		if actual == "" {
+			item.Error = "embedded asset unavailable"
+		}
+		result = append(result, item)
+	}
+	return result
+}
 
 func loadRuntimeAssetPins() (map[string]string, error) {
 	runtimeAssetOnce.Do(func() {

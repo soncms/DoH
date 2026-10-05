@@ -9,3 +9,4 @@ type DPIBackend struct{}
 func NewDPIBackend(Config, *log.Logger) (*DPIBackend, error) { return nil, nil }
 func (*DPIBackend) Start() error                             { return nil }
 func (*DPIBackend) Shutdown()                                {}
+func (*DPIBackend) Status() (bool, string)                   { return false, "" }

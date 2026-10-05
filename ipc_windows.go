@@ -4,11 +4,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,20 +23,57 @@ import (
 const sondnsPipeName = `\\.\pipe\SonDNS\control`
 
 type dnsIPCRequest struct {
-	Op         string     `json:"op"`
-	InstanceID string     `json:"instance_id,omitempty"`
-	Version    uint64     `json:"version,omitempty"`
-	Upstreams  []Upstream `json:"upstreams,omitempty"`
+	Op          string     `json:"op"`
+	InstanceID  string     `json:"instance_id,omitempty"`
+	Version     uint64     `json:"version,omitempty"`
+	Upstreams   []Upstream `json:"upstreams,omitempty"`
+	Enabled     *bool      `json:"enabled,omitempty"`
+	CaptureMode string     `json:"capture_mode,omitempty"`
 }
+
+type dnsIPCState struct {
+	DNSRunning    bool   `json:"dns_running"`
+	DPIRunning    bool   `json:"dpi_running"`
+	DPIEnabled    bool   `json:"dpi_enabled"`
+	CaptureMode   string `json:"capture_mode"`
+	Provider      string `json:"provider"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	LastError     string `json:"last_error,omitempty"`
+	AssetVerified bool   `json:"asset_verified"`
+	AssetError    string `json:"asset_error,omitempty"`
+}
+
+type dnsIPCConfig struct {
+	Provider         string     `json:"provider"`
+	Upstreams        []Upstream `json:"upstreams"`
+	DPIEnabled       bool       `json:"dpi_enabled"`
+	CaptureMode      string     `json:"capture_mode"`
+	ServiceAutoStart bool       `json:"service_auto_start"`
+}
+
+type dnsIPCDiagnostics struct {
+	Version       string                   `json:"version"`
+	BinarySHA256  string                   `json:"binary_sha256,omitempty"`
+	SignerStatus  string                   `json:"signer_status,omitempty"`
+	BuildInfoPath string                   `json:"build_info_path,omitempty"`
+	BuildInfo     map[string]any           `json:"build_info,omitempty"`
+	Assets        []runtimeAssetDiagnostic `json:"assets,omitempty"`
+}
+
 type dnsIPCResponse struct {
-	OK              bool              `json:"ok"`
-	Unchanged       bool              `json:"unchanged,omitempty"`
-	InstanceID      string            `json:"instance_id,omitempty"`
-	SchemaVersion   int               `json:"schema_version,omitempty"`
-	Version         uint64            `json:"version,omitempty"`
-	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
-	Entries         []DNSRequestEntry `json:"entries,omitempty"`
-	Error           string            `json:"error,omitempty"`
+	OK              bool               `json:"ok"`
+	Unchanged       bool               `json:"unchanged,omitempty"`
+	InstanceID      string             `json:"instance_id,omitempty"`
+	SchemaVersion   int                `json:"schema_version,omitempty"`
+	Version         uint64             `json:"version,omitempty"`
+	OverwrittenRows uint64             `json:"overwritten_rows,omitempty"`
+	Entries         []DNSRequestEntry  `json:"entries,omitempty"`
+	State           *dnsIPCState       `json:"state,omitempty"`
+	Config          *dnsIPCConfig      `json:"config,omitempty"`
+	Diagnostics     *dnsIPCDiagnostics `json:"diagnostics,omitempty"`
+	NeedsRestart    bool               `json:"needs_restart,omitempty"`
+	Code            string             `json:"code,omitempty"`
+	Error           string             `json:"error,omitempty"`
 }
 
 type dnsEngineProxy interface {
@@ -49,6 +89,7 @@ type dnsIPCServer struct {
 	done       chan struct{}
 	mu         sync.Mutex
 	active     windows.Handle
+	engine     *DNSProxyEngine
 }
 
 func newDNSIPCServer(ring *DNSRequestRing, proxy dnsEngineProxy) *dnsIPCServer {
@@ -112,20 +153,21 @@ func (s *dnsIPCServer) handle(h windows.Handle) {
 	}
 	var req dnsIPCRequest
 	if json.Unmarshal(line, &req) != nil {
-		writeIPC(f, dnsIPCResponse{Error: "invalid request"})
+		writeIPC(f, dnsIPCResponse{SchemaVersion: 3, Code: "INVALID_REQUEST", Error: "invalid request"})
 		return
 	}
 	_ = writeIPC(f, s.respond(req))
 }
 
 func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
-	resp := dnsIPCResponse{SchemaVersion: 2}
+	resp := dnsIPCResponse{SchemaVersion: 3}
 	switch strings.ToLower(strings.TrimSpace(req.Op)) {
 	case "snapshot":
 		resp.OK = true
 		curVer := s.ring.Version()
 		if req.InstanceID == s.instanceID && req.Version == curVer {
 			resp.Version = curVer
+			_, _, resp.OverwrittenRows = s.ring.SnapshotStats()
 			resp.Unchanged = true
 		} else {
 			resp.Entries, resp.Version, resp.OverwrittenRows = s.ring.SnapshotStats()
@@ -133,21 +175,123 @@ func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
 	case "clear_log":
 		resp.OK = true
 		resp.Version = s.ring.Clear()
+	case "get_state":
+		if s.engine == nil {
+			return s.fail(resp, "NOT_AVAILABLE", "runtime state unavailable")
+		}
+		resp.OK = true
+		resp.State = s.engine.ipcState()
+	case "get_config":
+		if s.engine == nil {
+			return s.fail(resp, "NOT_AVAILABLE", "runtime config unavailable")
+		}
+		resp.OK = true
+		resp.Config = s.engine.ipcConfig()
+	case "diagnostics":
+		resp.OK = true
+		version := buildVersion
+		if envVersion := os.Getenv("SONDNS_VERSION"); envVersion != "" {
+			version = envVersion
+		}
+		resp.Diagnostics = collectDNSDiagnostics(version)
 	case "set_upstream":
 		if s.proxy == nil {
-			resp.Error = "proxy unavailable"
+			return s.fail(resp, "NOT_AVAILABLE", "proxy unavailable")
 		} else if len(req.Upstreams) == 0 {
-			resp.Error = "no upstreams provided"
-		} else if err := s.proxy.SetUpstreams(req.Upstreams); err != nil {
-			resp.Error = err.Error()
+			return s.fail(resp, "VALIDATION_FAILED", "no upstreams provided")
 		} else {
+			var previous Config
+			if s.engine != nil {
+				previous = s.engine.configSnapshot()
+			}
+			if err := s.proxy.SetUpstreams(req.Upstreams); err != nil {
+				return s.fail(resp, "UPSTREAM_APPLY_FAILED", err.Error())
+			}
+			if s.engine != nil {
+				candidate := previous
+				candidate.Upstreams = append([]Upstream(nil), req.Upstreams...)
+				s.engine.setConfig(candidate)
+				if err := s.engine.persistConfig(); err != nil {
+					s.engine.setConfig(previous)
+					_ = s.proxy.SetUpstreams(previous.Upstreams)
+					return s.fail(resp, "CONFIG_SAVE_FAILED", err.Error())
+				}
+			}
 			resp.OK = true
 		}
+	case "set_dpi":
+		if s.engine == nil {
+			return s.fail(resp, "NOT_AVAILABLE", "runtime config unavailable")
+		}
+		if req.Enabled == nil || req.CaptureMode == "" {
+			return s.fail(resp, "VALIDATION_FAILED", "enabled and capture_mode are required")
+		}
+		candidate := s.engine.configSnapshot()
+		candidate.DPI.Enabled = *req.Enabled
+		candidate.DPI.CaptureMode = req.CaptureMode
+		if err := candidate.normalize(); err != nil {
+			return s.fail(resp, "VALIDATION_FAILED", err.Error())
+		}
+		previous := s.engine.configSnapshot()
+		s.engine.setConfig(candidate)
+		if err := s.engine.persistConfig(); err != nil {
+			s.engine.setConfig(previous)
+			return s.fail(resp, "CONFIG_SAVE_FAILED", err.Error())
+		}
+		resp.OK = true
+		resp.NeedsRestart = true
 	default:
-		resp.Error = fmt.Sprintf("unknown operation %q", req.Op)
+		return s.fail(resp, "UNKNOWN_OPERATION", fmt.Sprintf("unknown operation %q", req.Op))
 	}
 	resp.InstanceID = s.instanceID
 	return resp
+}
+
+func (s *dnsIPCServer) fail(resp dnsIPCResponse, code, message string) dnsIPCResponse {
+	resp.OK = false
+	resp.Code = code
+	resp.Error = message
+	resp.InstanceID = s.instanceID
+	return resp
+}
+
+func collectDNSDiagnostics(version string) *dnsIPCDiagnostics {
+	diagnostics := &dnsIPCDiagnostics{Version: version, SignerStatus: "unavailable", Assets: runtimeAssetDiagnostics()}
+	if executable, err := os.Executable(); err == nil {
+		if data, readErr := os.ReadFile(executable); readErr == nil {
+			hash := sha256.Sum256(data)
+			diagnostics.BinarySHA256 = hex.EncodeToString(hash[:])
+		}
+		dir := filepath.Dir(executable)
+		candidates := []string{
+			filepath.Join(dir, "build-info.json"),
+			filepath.Join(dir, "..", "build-info.json"),
+		}
+		for _, candidate := range candidates {
+			data, readErr := os.ReadFile(candidate)
+			if readErr != nil {
+				continue
+			}
+			var info map[string]any
+			if json.Unmarshal(data, &info) == nil {
+				diagnostics.BuildInfo = info
+				diagnostics.BuildInfoPath = candidate
+				if artifacts, ok := info["artifacts"].([]any); ok {
+					for _, item := range artifacts {
+						artifact, ok := item.(map[string]any)
+						if !ok || artifact["artifact"] != filepath.Base(executable) {
+							continue
+						}
+						if status, ok := artifact["status"].(string); ok {
+							diagnostics.SignerStatus = status
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+	return diagnostics
 }
 
 func writeIPC(f *os.File, v dnsIPCResponse) error {
