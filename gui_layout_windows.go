@@ -84,16 +84,26 @@ func (g *guiState) build() error {
 	if err = mw.SetLayout(layout); err != nil {
 		return err
 	}
-	dnsRow, err := uiRow(mw, 26)
+	configRow, err := walk.NewComposite(mw)
 	if err != nil {
 		return err
 	}
-	label, err := uiLabel(dnsRow, "DNS Server", false)
+	configLayout := walk.NewHBoxLayout()
+	_ = configLayout.SetMargins(walk.Margins{})
+	_ = configLayout.SetSpacing(2)
+	_ = configLayout.SetAlignment(walk.AlignHNearVCenter)
+	if err = configRow.SetLayout(configLayout); err != nil {
+		return err
+	}
+	if err = configRow.SetMinMaxSize(walk.Size{Height: 26}, walk.Size{Height: 26}); err != nil {
+		return err
+	}
+	label, err := uiLabel(configRow, "DNS Server", false)
 	if err != nil {
 		return err
 	}
-	_ = label.SetMinMaxSize(walk.Size{Width: 70, Height: 18}, walk.Size{Width: 70, Height: 18})
-	g.dnsProvider, err = walk.NewDropDownBox(dnsRow)
+	_ = label.SetMinMaxSize(walk.Size{Width: 62, Height: 18}, walk.Size{Width: 62, Height: 18})
+	g.dnsProvider, err = walk.NewDropDownBox(configRow)
 	if err != nil {
 		return err
 	}
@@ -102,17 +112,15 @@ func (g *guiState) build() error {
 		return err
 	}
 	g.dnsProvider.CurrentIndexChanged().Attach(g.changeDNSProvider)
-	_, _ = walk.NewHSpacer(dnsRow)
-	dpiRow, err := uiRow(mw, 26)
+	if _, err = walk.NewHSpacerFixed(configRow, 24); err != nil {
+		return err
+	}
+	dpiLabel, err := uiLabel(configRow, "DPI Mode", false)
 	if err != nil {
 		return err
 	}
-	dpiLabel, err := uiLabel(dpiRow, "DPI mode", false)
-	if err != nil {
-		return err
-	}
-	_ = dpiLabel.SetMinMaxSize(walk.Size{Width: 70, Height: 18}, walk.Size{Width: 70, Height: 18})
-	g.dpiMode, err = walk.NewDropDownBox(dpiRow)
+	_ = dpiLabel.SetMinMaxSize(walk.Size{Width: 55, Height: 18}, walk.Size{Width: 55, Height: 18})
+	g.dpiMode, err = walk.NewDropDownBox(configRow)
 	if err != nil {
 		return err
 	}
@@ -121,25 +129,10 @@ func (g *guiState) build() error {
 		return err
 	}
 	g.dpiMode.CurrentIndexChanged().Attach(g.changeCaptureMode)
-	_, _ = walk.NewHSpacer(dpiRow)
-	service, err := uiRow(mw, 26)
-	if err != nil {
-		return err
-	}
-	g.serviceStatus, err = uiLabel(service, "checking…", false)
-	if err != nil {
-		return err
-	}
-	_ = g.serviceStatus.SetEllipsisMode(walk.EllipsisEnd)
-	_ = g.serviceStatus.SetMinMaxSize(walk.Size{Width: 174, Height: 18}, walk.Size{Height: 18})
-	_, _ = walk.NewHSpacer(service)
-	g.autoStart, err = walk.NewCheckBox(service)
-	if err != nil {
-		return err
-	}
-	_ = g.autoStart.SetText("Start with Windows")
-	_ = g.autoStart.SetMinMaxSize(walk.Size{Width: 138, Height: 24}, walk.Size{Width: 138, Height: 24})
-	g.serviceButton, err = walk.NewSplitButton(service)
+	// Absorb the remaining row width after both controls so Walk does not
+	// distribute it between the labels and dropdowns.
+	_, _ = walk.NewHSpacer(configRow)
+	g.serviceButton, err = walk.NewSplitButton(configRow)
 	if err != nil {
 		return err
 	}
@@ -160,6 +153,13 @@ func (g *guiState) build() error {
 			return err
 		}
 	}
+
+	// Keep the queried service state for logic/tests without spending a visible row.
+	g.serviceStatus, err = uiLabel(mw, "", false)
+	if err != nil {
+		return err
+	}
+	g.serviceStatus.SetVisible(false)
 	logHeader, err := uiRow(mw, 26)
 	if err != nil {
 		return err
@@ -168,11 +168,13 @@ func (g *guiState) build() error {
 		return err
 	}
 	_, _ = walk.NewHSpacer(logHeader)
-	g.clearButton, err = uiButton(logHeader, "Clear log", 72, 26, g.clearRequestLog)
+	g.autoStart, err = walk.NewCheckBox(logHeader)
 	if err != nil {
 		return err
 	}
-	g.detailsButton, err = uiButton(logHeader, "Details", 64, 26, g.showSelectedRequest)
+	_ = g.autoStart.SetText("Start with Windows")
+	_ = g.autoStart.SetMinMaxSize(walk.Size{Width: 138, Height: 24}, walk.Size{Width: 138, Height: 24})
+	g.clearButton, err = uiButton(logHeader, "Clear log", 72, 26, g.clearRequestLog)
 	if err != nil {
 		return err
 	}

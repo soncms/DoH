@@ -25,7 +25,6 @@ type guiState struct {
 	serviceButton                                            *walk.SplitButton
 	stopAction, restartAction, uninstallAction               *walk.Action
 	status, serviceStatus                                    *walk.Label
-	detailsButton                                            *walk.PushButton
 	dpiMode                                                  *walk.ComboBox
 	requestLog                                               *walk.TableView
 	logModel                                                 *requestLogModel
@@ -39,7 +38,7 @@ type guiState struct {
 	logHighlightTimer                                        *time.Timer
 	instanceID                                               string
 	service                                                  serviceSnapshot
-	copyDomainAction, copyIPAction, detailsAction            *walk.Action
+	copyDomainAction, copyIPAction                           *walk.Action
 	serviceKnown, autoDirty, busy, exiting, syncingAutoStart bool
 	syncingDPI, syncingProvider                              bool
 	columnsInitialized                                       bool
@@ -756,10 +755,6 @@ func (g *guiState) setupRequestContextMenu() {
 	g.copyIPAction.Triggered().Attach(func() { g.copyRequestField(true) })
 	_ = menu.Actions().Add(g.copyDomainAction)
 	_ = menu.Actions().Add(g.copyIPAction)
-	g.detailsAction = walk.NewAction()
-	_ = g.detailsAction.SetText("Show request details")
-	g.detailsAction.Triggered().Attach(g.showSelectedRequest)
-	_ = menu.Actions().Add(g.detailsAction)
 	g.requestLog.SetContextMenu(menu)
 	g.requestLog.CurrentIndexChanged().Attach(func() { g.updateCopyActions() })
 	g.requestLog.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
@@ -778,10 +773,6 @@ func (g *guiState) updateCopyActions() {
 	valid := idx >= 0 && idx < len(g.logModel.rows)
 	_ = g.copyDomainAction.SetEnabled(valid)
 	_ = g.copyIPAction.SetEnabled(valid && len(g.logModel.rows[idx].AnswerIPs) > 0)
-	_ = g.detailsAction.SetEnabled(valid)
-	if g.detailsButton != nil {
-		g.detailsButton.SetEnabled(valid)
-	}
 	if valid {
 		_ = g.requestLog.SetToolTipText(g.logModel.rows[idx].Error)
 	} else {
@@ -789,18 +780,6 @@ func (g *guiState) updateCopyActions() {
 	}
 }
 
-func (g *guiState) showSelectedRequest() {
-	idx := g.requestLog.CurrentIndex()
-	if idx < 0 || idx >= len(g.logModel.rows) {
-		return
-	}
-	e := g.logModel.rows[idx]
-	message := fmt.Sprintf("Domain: %s\nType: %s\nResult: %s\nProtocol: %s\nLatency: %.1f ms", strings.TrimSuffix(e.Domain, "."), e.Type, e.Result, e.Protocol, float64(e.DurationUS)/1000)
-	if e.Error != "" {
-		message += "\nError: " + e.Error
-	}
-	walk.MsgBox(g.mw, "DNS request details", message, walk.MsgBoxOK|walk.MsgBoxIconInformation)
-}
 func (g *guiState) copyRequestField(ip bool) {
 	idx := g.requestLog.CurrentIndex()
 	if idx < 0 || idx >= len(g.logModel.rows) {
