@@ -38,6 +38,8 @@ also checks the native process handoff wait. It removes the owned accounts and
 child and records `accounts.json`; no existing account or UAC policy is changed.
 A pass proves those token/ACL/backend operations, not the credential prompt,
 secure desktop, Manage-button handoff or cross-account GUI/tray startup.
+The standard account uses an interactive logon; the administrator uses a batch
+logon. The fixture does not modify UAC or logon-right policies.
 
 The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
 address and scoped link-local address, with timeout controls before/after the

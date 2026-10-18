@@ -30,6 +30,7 @@ var lifecycleCreateWithToken = windows.NewLazySystemDLL("advapi32.dll").NewProc(
 
 type lifecycleAccountReport struct {
 	Name, SID                                                        string
+	LogonType                                                        uint32
 	Elevated, Administrator, ConfigRead, SCMRead, StateRead, LogRead bool
 	ConfigWriteDenied, SCMMutateDenied, PipeCreateDenied             uint32
 	RejectedOperations                                               []string
@@ -107,22 +108,23 @@ func newLifecycleAccount(t *testing.T, admin bool, report *lifecycleAccountRepor
 		}
 	}
 	domain, _ := windows.UTF16PtrFromString(".")
+	// An interactive administrator logon is split by UAC. Its linked token
+	// can be identification-only for this caller and cannot be upgraded to
+	// SecurityImpersonation (ERROR_BAD_IMPERSONATION_LEVEL). Use a batch
+	// logon for this backend-only admin probe; no UAC or account-right policy
+	// is changed. The standard-user child still uses an interactive logon.
+	report.LogonType = 2 // LOGON32_LOGON_INTERACTIVE
+	if admin {
+		report.LogonType = 4 // LOGON32_LOGON_BATCH
+	}
 	ok, _, err := lifecycleLogonUser.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(domain)),
-		uintptr(unsafe.Pointer(&password[0])), 2 /* INTERACTIVE */, 0, uintptr(unsafe.Pointer(&a.primary)))
+		uintptr(unsafe.Pointer(&password[0])), uintptr(report.LogonType), 0, uintptr(unsafe.Pointer(&a.primary)))
 	if ok == 0 {
 		t.Fatalf("log on owned temporary account: %v", err)
 	}
-	if admin && !a.primary.IsElevated() {
-		linked, err := a.primary.GetLinkedToken()
-		if err != nil {
-			t.Fatalf("get owned administrator's linked token: %v", err)
-		}
-		_ = a.primary.Close()
-		a.primary = linked
-	}
 	if err := windows.DuplicateTokenEx(a.primary, windows.TOKEN_QUERY|windows.TOKEN_IMPERSONATE,
 		nil, windows.SecurityImpersonation, windows.TokenImpersonation, &a.impersonation); err != nil {
-		t.Fatal(err)
+		t.Fatalf("duplicate owned account logon type %d for impersonation: %v", report.LogonType, err)
 	}
 	user, err := a.primary.GetTokenUser()
 	if err != nil {
@@ -215,11 +217,11 @@ func runLifecycleAccountAccess(t *testing.T, configPath string, settings Config)
 	t.Helper()
 	report := lifecycleAccountsReport{}
 	var accounts []*lifecycleAccount
-	defer func() {
-		for i := len(accounts) - 1; i >= 0; i-- {
-			accounts[i].cleanup()
-		}
-		report.AccountsRemoved = len(accounts) == 2 && report.Standard.Removed && report.Administrator.Removed
+	// Registered before account cleanup callbacks, so even a constructor
+	// failure records the subsequent removal rather than a premature snapshot.
+	t.Cleanup(func() {
+		report.AccountsRemoved = report.Standard.Name != "" && report.Administrator.Name != "" &&
+			report.Standard.Removed && report.Administrator.Removed
 		if report.AccountsRemoved && report.ChildExited {
 			t.Log("temporary Windows accounts removed and owned child exited")
 		}
@@ -231,6 +233,11 @@ func runLifecycleAccountAccess(t *testing.T, configPath string, settings Config)
 			if err != nil {
 				t.Errorf("save account verification report: %v", err)
 			}
+		}
+	})
+	defer func() {
+		for i := len(accounts) - 1; i >= 0; i-- {
+			accounts[i].cleanup()
 		}
 	}()
 	creator, err := windows.GetCurrentProcessToken().GetTokenUser()
