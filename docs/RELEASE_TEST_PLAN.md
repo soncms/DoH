@@ -34,6 +34,15 @@ controls and a concrete backup path. Each procedure still needs an explicit
 pass on the tested commit. This covers an already elevated session; UAC, power
 loss and the other failure stages below remain separate cases.
 
+Two additional running-service cases use handles opened without SERVICE_STOP or
+SERVICE_CHANGE_CONFIG. Production SCM calls must return Windows access denied
+(5); no fake error or account/service ACL change is used. A denied stop must
+leave the source service/DPI PIDs unchanged. A denied rebind must occur after
+the source is observed stopped, then restore its binding/config and restart it
+with new service/DPI PIDs. Both cases verify exact SCM/config/tray state, backup
+hashes and UDP/TCP DNS after rollback. A pass covers these native handle-rights
+failures; it does not establish every stop/rebind failure mode or a UAC flow.
+
 The account fixture uses two newly created local Windows identities and actual
 logon tokens to check standard-user monitoring/denied management and a separate
 elevated administrator's authorized IPC log clear. Its live windowless child

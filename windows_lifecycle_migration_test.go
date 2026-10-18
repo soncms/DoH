@@ -160,6 +160,7 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 		requireNoLifecycleDPI(t, targetHelper)
 		requireLifecycleMigrationDNS(t, settings.Listen)
 	})
+	runLifecycleMigrationAccessFailures(t, s, p, targetBefore, backups, &report.AccessFailures)
 	runLifecycleMigrationInterruptions(t, s, p, targetBefore, parent, backups, &report.Interruptions)
 	oldDPI = waitForLifecycleDPI(t, sourceHelper, 0)
 	p = prepare()
@@ -328,6 +329,7 @@ type lifecycleMigrationReport struct {
 	RollbackVerified, MigrationVerified, CleanupVerified          bool
 	GUI                                                           lifecycleMigrationGUIReport
 	Interruptions                                                 []lifecycleMigrationInterruptionReport
+	AccessFailures                                                []lifecycleMigrationAccessReport
 	CandidateValidationError                                      string
 	CandidateValidationErrorCode                                  uint32
 	SourceRestartValidationPassed, CandidateLockHeldDuringRestart bool

@@ -84,6 +84,8 @@ try {
     'embedded DPI helper restarted after forced exit', 'embedded DPI helper stopped without orphan',
     'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors',
     'live migration rollback after real SCM startup failure',
+    'live migration native stop access denial verified: error 5, exact rollback, source PID and DNS verified',
+    'live migration native rebind access denial verified: error 5, exact rollback, source PID and DNS verified',
     'live migration rollback kept candidate image locked through old-service DNS recovery',
     'live migration completed: custom config, SCM fields, tray, backup hashes and DNS verified',
     'live migration cleanup verified: service, driver, tray and both helper paths absent',
@@ -104,6 +106,30 @@ try {
     if (-not $log.Contains($check)) { throw "Lifecycle evidence is missing: $check" }
   }
   $migration = Get-Content -LiteralPath (Join-Path $reportRoot 'migration.json') -Raw | ConvertFrom-Json
+  $accessFailures = @($migration.AccessFailures)
+  if ($accessFailures.Count -ne 2) { throw 'Native stop/rebind access-denial reports are incomplete' }
+  foreach ($operation in @('stop','rebind')) {
+    $cases = @($accessFailures | Where-Object { $_.Operation -ceq $operation })
+    if ($cases.Count -ne 1) { throw "Missing/duplicate native access-denial case: $operation" }
+    $case = $cases[0]
+    if (-not $case.Verified -or -not $case.DNSVerified -or $case.ErrorCode -ne 5 -or -not $case.Error -or
+        $case.StopCalls -ne 1 -or $case.ServiceBefore.State -ne 4 -or $case.ServiceAfter.State -ne 4 -or
+        $case.ServiceBefore.ProcessId -le 0 -or $case.ServiceAfter.ProcessId -le 0 -or
+        $case.SourceBeforeSHA256 -cne $case.SourceAfterSHA256 -or
+        $case.DestinationBeforeSHA256 -cne $case.DestinationAfterSHA256 -or $case.Backup.Status -cne 'rolled-back') {
+      throw "Native access-denial rollback is unverified: $operation"
+    }
+    if ($operation -ceq 'stop') {
+      if (($case.RequestedAccess -band 0x20) -ne 0 -or $case.BindCalls -ne 0 -or $case.StartCalls -ne 0 -or
+          $case.ServiceBefore.ProcessId -ne $case.ServiceAfter.ProcessId -or $case.DPIBefore -ne $case.DPIAfter) {
+        throw 'Denied stop unexpectedly interrupted the source'
+      }
+    } elseif (($case.RequestedAccess -band 0x2) -ne 0 -or $case.BindCalls -ne 1 -or $case.StartCalls -ne 1 -or
+        $case.StoppedBeforeBind.State -ne 1 -or $case.StoppedBeforeBind.ProcessId -ne 0 -or
+        $case.ServiceBefore.ProcessId -eq $case.ServiceAfter.ProcessId -or $case.DPIBefore -eq $case.DPIAfter) {
+      throw 'Denied rebind did not establish stopped-source rollback and restart'
+    }
+  }
   $points = @('prepared','switching','after-stop','bound','after-start','after-tray')
   if (@($migration.Interruptions).Count -ne $points.Count) { throw 'Migration interruption cases are incomplete' }
   foreach ($point in $points) {

@@ -160,7 +160,7 @@ jobs:
             buildOutcome = $env:SONDNS_BUILD_OUTCOME; testOutcome = $env:SONDNS_TEST_OUTCOME
             lifecyclePassed = $passed; fullReleaseValidationPassed = $false
             artifactIdentity = $identity
-            stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'other migration failure stages beyond pre-stage validation and locked-image SCM start',
+            stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'other migration failure stages beyond pre-stage validation, native stop/rebind access denial and locked-image SCM start',
               'power-loss and manual recovery',
               'DPI effectiveness and application compatibility', 'publisher signing', 'maintainer release review')
           } | ConvertTo-Json | Set-Content -LiteralPath "$reports/workflow-result.json" -Encoding utf8
