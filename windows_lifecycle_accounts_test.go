@@ -44,6 +44,7 @@ type lifecycleAccountsReport struct {
 	Standard, Administrator                                  lifecycleAccountReport
 	ChildPID                                                 uint32
 	ChildExitCode                                            uint32
+	ParentSessionID, ChildSessionID                          uint32
 	ChildForced                                              bool
 	HandoffWait                                              time.Duration
 	HandoffBeforeDenied                                      uint32
@@ -420,7 +421,9 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		t.Fatal(err)
 	}
-	prefix := `Local\SonDNS.Handoff.` + rand.Text()
+	// Explicitly use the global event namespace; logon-token session IDs may
+	// differ from the runner's even though process handles are system-wide.
+	prefix := `Global\SonDNS.Handoff.` + rand.Text()
 	events := newLifecycleHandoffEvents(t, prefix, standard.report.SID)
 	application, _ := windows.UTF16PtrFromString(exe)
 	command, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{exe,
@@ -466,6 +469,12 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		t.Fatalf("wait child identity differs: %v", err)
 	}
 	report.ChildSID = user.User.Sid.String()
+	if err := windows.ProcessIdToSessionId(uint32(os.Getpid()), &report.ParentSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.ProcessIdToSessionId(child.ProcessId, &report.ChildSessionID); err != nil {
+		t.Fatal(err)
+	}
 	waitLifecycleHandoffChildEvent(t, events["alive"], child.Process, "standard-account startup")
 	state, err := windows.WaitForSingleObject(child.Process, 0)
 	if err != nil || state != uint32(windows.WAIT_TIMEOUT) {

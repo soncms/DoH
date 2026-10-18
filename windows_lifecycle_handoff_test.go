@@ -4,9 +4,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"syscall"
 	"testing"
 	"unsafe"
 
@@ -21,6 +23,8 @@ type lifecycleHandoffAccessReport struct {
 	RestoreVerified           bool
 	Stage                     string
 	Failed                    bool
+	Error                     string
+	NativeError, SessionID    uint32
 }
 
 // This child only changes its own process DACL. It never starts a GUI, service,
@@ -43,63 +47,61 @@ func TestLifecycleGUIHandoffAccountChild(t *testing.T) {
 			t.Errorf("write handoff child report: %v", err)
 		}
 	}()
+	check := func(label string, err error) {
+		if err != nil {
+			report.Error = label + ": " + err.Error()
+			var native syscall.Errno
+			if errors.As(err, &native) {
+				report.NativeError = uint32(native)
+			}
+			t.Fatal(report.Error)
+		}
+	}
 	if os.Getenv("SONDNS_ACCOUNT_TEST") != "1" || os.Getenv("SONDNS_SERVICE_TEST") != "1" ||
 		*lifecycleHandoffReport == "" || windows.GetCurrentProcessToken().IsElevated() {
-		t.Fatal("handoff child requires the opted-in standard-account fixture")
+		report.Error = "handoff child requires the opted-in standard-account fixture"
+		t.Fatal(report.Error)
 	}
+	check("query child session", windows.ProcessIdToSessionId(uint32(os.Getpid()), &report.SessionID))
 	report.Stage = "open-events"
 	events := make(map[string]windows.Handle)
 	for _, label := range []string{"alive", "prepare", "ready", "exit"} {
 		name, err := windows.UTF16PtrFromString(*lifecycleHandoffEvents + "." + label)
-		if err != nil {
-			t.Fatal(err)
-		}
+		check("encode event name", err)
 		h, err := windows.OpenEvent(windows.SYNCHRONIZE|windows.EVENT_MODIFY_STATE, false, name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		check("OpenEvent "+label, err)
 		defer windows.CloseHandle(h)
 		events[label] = h
 	}
-	if err := windows.SetEvent(events["alive"]); err != nil {
-		t.Fatal(err)
-	}
+	check("signal startup", windows.SetEvent(events["alive"]))
 	waitLifecycleHandoffEvent(t, events["prepare"], "parent preparation request")
 	report.Stage = "prepare-and-restore"
 	readDACL := func() string {
 		sd, err := windows.GetSecurityInfo(windows.CurrentProcess(), windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION)
-		if err != nil {
-			t.Fatal(err)
-		}
+		check("read process DACL", err)
 		return sd.String()
 	}
 	report.Before = readDACL()
 	restore, err := prepareGUIHandoffAccess()
-	if err != nil {
-		t.Fatal(err)
-	}
+	check("prepare process access", err)
 	report.Granted = readDACL()
-	if err := restore(); err != nil {
-		t.Fatal(err)
-	}
+	check("restore process access", restore())
 	report.Restored = readDACL()
 	if report.Before == report.Granted || report.Before != report.Restored {
-		t.Fatal("owned process DACL was not granted/restored exactly")
+		report.Error = "owned process DACL was not granted/restored exactly"
+		t.Fatal(report.Error)
 	}
 	report.RestoreVerified = true
 	report.Stage = "prepare-for-wait"
 	restore, err = prepareGUIHandoffAccess()
-	if err != nil {
-		t.Fatal(err)
-	}
+	check("prepare second process access", err)
 	defer func() {
 		if err := restore(); err != nil {
+			report.Error = "restore second handoff grant: " + err.Error()
 			t.Errorf("restore second handoff grant: %v", err)
 		}
 	}()
-	if err := windows.SetEvent(events["ready"]); err != nil {
-		t.Fatal(err)
-	}
+	check("signal readiness", windows.SetEvent(events["ready"]))
 	waitLifecycleHandoffEvent(t, events["exit"], "parent exit request")
 	report.Stage = "completed"
 }
