@@ -348,14 +348,18 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 				}
 				// The upstream gate proves a synthetic packet is in flight in the
 				// real interceptor. Keep its reply held until SCM reports Stopped.
-				queryCtx, cancelQuery := context.WithCancel(context.Background())
-				defer cancelQuery()
+				client := &dns.Client{Net: "udp", Timeout: 10 * time.Second}
+				queryConn, err := client.Dial("203.0.113.53:53")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer queryConn.Close()
 				defer releaseHeld()
 				queryDone := make(chan error, 1)
 				go func() {
 					q := new(dns.Msg)
 					q.SetQuestion("sondns-hold.invalid.", dns.TypeA)
-					_, _, err := (&dns.Client{Net: "udp", Timeout: 10 * time.Second}).ExchangeContext(queryCtx, q, "203.0.113.53:53")
+					_, _, err := client.ExchangeWithConn(q, queryConn)
 					queryDone <- err
 				}()
 				select {
@@ -378,7 +382,9 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 				} else {
 					t.Logf("in-flight intercepted query held upstream during stop: %s", elapsed)
 				}
-				cancelQuery()
+				// miekg/dns applies context deadlines, but cancellation alone
+				// does not interrupt its UDP read. Close this test client's socket.
+				_ = queryConn.Close()
 				releaseHeld()
 				select {
 				case err := <-queryDone:
