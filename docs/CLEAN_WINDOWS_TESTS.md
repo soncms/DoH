@@ -108,6 +108,9 @@ SYNCHRONIZE, verifies exact DACL restoration, then prepares again. The other
 admin must wait successfully while terminate, memory-write and DACL-change
 access remain denied. Both accounts
 and the owned child must be removed/exited and reported in `accounts.json`.
+The writable child diagnostic file must be rejected by the production file ACL
+policy, then removed with the harness/handle manifest. The full service tree
+must pass production permission validation before the lifecycle restarts it.
 This procedure requires an explicit pass on the tested commit. It does not
 operate the Manage button, credential prompt, secure desktop or GUI/tray under
 the other account, and does not establish the full UAC handoff flow.

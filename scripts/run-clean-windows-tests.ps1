@@ -135,6 +135,8 @@ try {
       $accounts.HandoffAccess.Before -ceq $accounts.HandoffAccess.Granted -or
       $accounts.HandoffRendezvous -cne 'duplicated-anonymous-events' -or $accounts.HandoffEventCount -ne 4 -or
       $accounts.HandoffEventAccess -ne 0x100002 -or $accounts.HandoffAccess.EventHandlesVerified -ne 4 -or
+      -not $accounts.HandoffUnsafeFixtureError -or $accounts.HandoffFixtureRemoved -ne $true -or
+      $accounts.ServiceFolderRevalidated -ne $true -or
       $accounts.HandoffControlDenied.terminate -ne 5 -or $accounts.HandoffControlDenied.writeMemory -ne 5 -or
       $accounts.HandoffControlDenied.changeDACL -ne 5 -or
       $accounts.ChildSID -cne $accounts.Standard.SID -or $accounts.CreatorSID -ceq $accounts.Standard.SID -or

@@ -51,6 +51,8 @@ type lifecycleAccountsReport struct {
 	HandoffControlDenied                                     map[string]uint32
 	HandoffRendezvous                                        string
 	HandoffEventCount, HandoffEventAccess                    uint32
+	HandoffUnsafeFixtureError                                string
+	HandoffFixtureRemoved, ServiceFolderRevalidated          bool
 	HandoffAccess                                            lifecycleHandoffAccessReport
 	StandardVerified, AdministratorVerified, HandoffVerified bool
 	ChildExited, AccountsRemoved                             bool
@@ -223,7 +225,7 @@ func lifecycleSCMAccess(access uint32) error {
 	return err
 }
 
-func runLifecycleAccountAccess(t *testing.T, configPath string, settings Config) {
+func runLifecycleAccountAccess(t *testing.T, serviceRoot, configPath string, settings Config) {
 	t.Helper()
 	report := lifecycleAccountsReport{}
 	var accounts []*lifecycleAccount
@@ -345,6 +347,16 @@ func runLifecycleAccountAccess(t *testing.T, configPath string, settings Config)
 	t.Log("cross-account administrator verified: protected access and authorized IPC log clear")
 	requireLifecycleMigrationDNS(t, settings.Listen)
 	runLifecycleAccountHandoff(t, standard, admin, filepath.Dir(configPath), &report)
+	for _, name := range []string{"handoff-fixture.tests.exe", "handoff-fixture-events.json", "handoff-fixture-result.json"} {
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(configPath), name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("owned handoff fixture file remains: %s: %v", name, err)
+		}
+	}
+	report.HandoffFixtureRemoved = true
+	if err := validatePortableServiceFolder(serviceRoot); err != nil {
+		t.Fatalf("account fixture left an unsafe service tree: %v", err)
+	}
+	report.ServiceFolderRevalidated = true
 }
 
 func readLifecycleAccountAccess(t *testing.T, path string, want []byte, report *lifecycleAccountReport) {
@@ -404,6 +416,14 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 	if err := os.WriteFile(childReport, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The report deliberately grants the standard SID write access. Read its
+	// diagnostics first, then remove it before any service restart validates
+	// the entire application tree. Never weaken that production validation.
+	defer func() {
+		if err := os.Remove(childReport); err != nil {
+			t.Errorf("remove owned writable handoff report: %v", err)
+		}
+	}()
 	defer func() {
 		if data, err := os.ReadFile(childReport); err == nil && len(data) != 0 {
 			if err := json.Unmarshal(data, &report.HandoffAccess); err != nil {
@@ -567,6 +587,12 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		!report.HandoffAccess.RestoreVerified || report.HandoffAccess.Failed || report.HandoffAccess.Stage != "completed" {
 		t.Fatalf("child did not verify production DACL grant/restoration: %v", err)
 	}
+	unsafeReport := validateServiceObject(childReport, serviceACLFile)
+	if unsafeReport == nil || !strings.Contains(unsafeReport.Error(), standard.report.SID) ||
+		!strings.Contains(unsafeReport.Error(), "non-administrator") {
+		t.Fatalf("writable fixture report was not rejected by service ACL policy: %v", unsafeReport)
+	}
+	report.HandoffUnsafeFixtureError = unsafeReport.Error()
 	report.HandoffVerified = true
 	t.Log("cross-account handoff wait verified: separate administrator waited for the live standard-user process")
 }

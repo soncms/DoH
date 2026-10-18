@@ -339,7 +339,7 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 					t.Fatal("clear retained a previously observed request")
 				}
 			}
-			runLifecycleAccountAccess(t, path, config)
+			runLifecycleAccountAccess(t, dir, path, config)
 			// The fixture is a copied EXE. Test process ownership intentionally
 			// differs, so use a handle verified against that exact fixture path.
 			func() {

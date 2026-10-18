@@ -47,6 +47,9 @@ Fixture synchronization uses four anonymous event handles explicitly duplicated
 with SYNCHRONIZE/EVENT_MODIFY_STATE into the suspended child, then recorded in a
 SID-readable manifest before resume. No process rights or caller handles are
 inherited, and named-event security is outside this fixture's scope.
+The child-writable diagnostic file is an explicit negative ACL control. All
+handoff fixture files must be removed and the full service tree revalidated
+before the immediate service restart; production folder policy stays strict.
 After the production preparation helper grants only SYNCHRONIZE, a native wait
 must succeed while process control access remains denied. The child also
 verifies exact DACL restoration; actual UAC cancellation still needs review.
