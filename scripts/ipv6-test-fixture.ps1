@@ -29,7 +29,7 @@ function Get-FixtureSourceRoutes {
     Where-Object { $_.DestinationPrefix -eq "$($script:state.source)/128" })
 }
 function Get-FixtureNeighbors([string]$Address) {
-  @(Get-NetNeighbor -AddressFamily IPv6 -InterfaceIndex $script:state.interfaceIndex |
+  @(Get-NetNeighbor -AddressFamily IPv6 -PolicyStore ActiveStore -InterfaceIndex $script:state.interfaceIndex |
     Where-Object { $_.IPAddress -eq $Address })
 }
 function Get-FixtureInterface {
@@ -59,21 +59,8 @@ function Assert-InterfaceUnchanged {
 }
 function Remove-Fixture {
   Assert-FixtureIdentity
-  foreach ($entry in @(
-    @{ address=$script:state.destination; owned='ownsDestinationNeighbor' },
-    @{ address=$script:state.linkLocalDestination; owned='ownsLinkLocalNeighbor' }
-  )) {
-    if ($script:state.($entry.owned)) {
-      foreach ($neighbor in @(Get-FixtureNeighbors $entry.address)) {
-        if ($neighbor.LinkLayerAddress -ine $script:state.neighborMAC -or $neighbor.State -ne 'Permanent') {
-          throw 'IPv6 neighbor changed concurrently; cleanup did not overwrite it'
-        }
-        $neighbor | Remove-NetNeighbor -Confirm:$false
-      }
-      $script:state.($entry.owned) = $false
-      Save-Fixture
-    }
-  }
+  # Remove the synthetic route/source before neighbors so no queued traffic
+  # from that source can recreate destination cache entries during cleanup.
   if ($script:state.ownsRoute) {
     foreach ($route in @(Get-FixtureRoutes)) {
       if ($route.NextHop -ne '::' -or $route.RouteMetric -ne 1) { throw 'IPv6 route changed concurrently; cleanup preserved it' }
@@ -89,6 +76,38 @@ function Remove-Fixture {
     }
     $script:state.ownsSource = $false
     Save-Fixture
+  }
+  foreach ($entry in @(
+    @{ address=$script:state.destination; owned='ownsDestinationNeighbor' },
+    @{ address=$script:state.linkLocalDestination; owned='ownsLinkLocalNeighbor' }
+  )) {
+    if ($script:state.($entry.owned)) {
+      $neighbors = @(Get-FixtureNeighbors $entry.address)
+      $observation = [ordered]@{ address=$entry.address; before=@($neighbors | Select-Object IPAddress,LinkLayerAddress,State); after=@(); removed=$false }
+      $script:state.neighborRemoval += $observation
+      Save-Fixture
+      foreach ($neighbor in $neighbors) {
+        if ($neighbor.LinkLayerAddress -ine $script:state.neighborMAC -or $neighbor.State -ne 'Permanent') {
+          throw 'IPv6 neighbor changed concurrently; cleanup did not overwrite it'
+        }
+        # Use an explicit store/key instead of CIM InputObject deletion. Keep
+        # ownership until a fresh query confirms disappearance, not just a
+        # successful command return.
+        Remove-NetNeighbor -AddressFamily IPv6 -InterfaceIndex $script:state.interfaceIndex -IPAddress $entry.address -LinkLayerAddress $script:state.neighborMAC -State Permanent -PolicyStore ActiveStore -Confirm:$false
+      }
+      $deadline = [DateTime]::UtcNow.AddSeconds(5)
+      do {
+        $remaining = @(Get-FixtureNeighbors $entry.address)
+        if (-not $remaining.Count) { break }
+        Start-Sleep -Milliseconds 200
+      } while ([DateTime]::UtcNow -lt $deadline)
+      $observation.after = @($remaining | Select-Object IPAddress,LinkLayerAddress,State)
+      Save-Fixture
+      if ($remaining.Count) { throw "IPv6 neighbor removal not confirmed: $($observation.after | ConvertTo-Json -Compress)" }
+      $observation.removed = $true
+      $script:state.($entry.owned) = $false
+      Save-Fixture
+    }
   }
   $script:state.resourcesAfterRemoval = [ordered]@{
     sourceAddresses=@(Get-FixtureAddresses).Count; destinationRoutes=@(Get-FixtureRoutes).Count
@@ -135,7 +154,7 @@ $script:state = [ordered]@{
   destination=([Net.IPAddress]::Parse("2001:db8:5344:${segment}::53").ToString())
   linkLocalSource=$selected.address; linkLocalDestination=([Net.IPAddress]::Parse("fe80::5344:${segment}:53").ToString())
   neighborMAC=('02-53-' + ($owner.Substring(4,8) -replace '(..)(..)(..)(..)','$1-$2-$3-$4'))
-  interfaceBefore=$null; interfaceAfter=$null; sourceObserved=$null; resourcesAfterRemoval=$null
+  interfaceBefore=$null; interfaceAfter=$null; sourceObserved=$null; resourcesAfterRemoval=$null; neighborRemoval=@()
   ownsSource=$false; ownsRoute=$false
   ownsDestinationNeighbor=$false; ownsLinkLocalNeighbor=$false
   setupComplete=$false; cleanupVerified=$false; error=''

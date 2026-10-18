@@ -54,6 +54,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/scm-migration-tests.json"; exit 1 }
       - name: Package application source and verify an offline rebuild
         run: |
+          ./scripts/test-ipv6-fixture.ps1
           python -I -B -m unittest discover -s scripts -p 'test_*.py'
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $version = "ci-${{ github.sha }}"
