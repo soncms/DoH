@@ -73,6 +73,23 @@ Cleanup calls uninstall from the currently owning fixture EXE and verifies both
 helper paths, service, driver and tray are absent. Reports retain journals,
 manifests and logs; inert backed-up EXE/runtime `.bin` files are not uploaded.
 
+The lifecycle also terminates six owned migration harness children using the
+native TerminateProcess API, after preparation, switching journal, service stop,
+binding journal, service start and tray update. Each barrier follows the actual
+production operation. A child exit code of 173 must be observed; no deferred
+rollback runs. The report must preserve the actual SCM/tray/config and versioned
+journal state. The real destination GUI is opened for one second and reaped;
+these states must remain unchanged. An explicit test-only manual restoration
+then uses verified backup bytes, preserves unrelated SCM fields and restores
+working DNS. All six cases and the regular migration must pass on the recorded
+commit. This tests process termination, not physical power loss, storage-cache
+durability, reboot or the interactive UAC flow.
+
+Schema 1 journals record backup readiness, the legacy manifest hash, whether a
+destination config existed, its exact hash/size and the candidate hash/size.
+An absent config and an empty previous file are distinct. Older journals still
+require manual inspection; no automatic recovery runs on startup.
+
 It removes its
 fixture when cleanup succeeds, and retains it when recovery is needed. Logs and JSON results
 are saved in `reports/` under the kit folder. A skipped lifecycle test is a

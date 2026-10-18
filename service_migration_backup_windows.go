@@ -20,6 +20,28 @@ type migrationBackupFile struct {
 	Size   int
 }
 
+// Versioned recovery facts are committed before the destination config changes.
+// A reader can verify both the legacy manifest and the exact previous config
+// without trusting an in-memory Undo closure or re-serializing a future Config.
+type migrationRecoveryMetadata struct {
+	Ready               bool
+	FilesManifestSHA256 string
+	DestinationExisted  bool
+	DestinationSHA256   string
+	DestinationSize     int
+	CandidateSHA256     string
+	CandidateSize       int
+}
+
+type migrationJournal struct {
+	SchemaVersion int
+	Status        string
+	UpdatedUTC    time.Time
+	Error         string
+	Plan          serviceMigrationPlan
+	Recovery      migrationRecoveryMetadata
+}
+
 // Backup files are inert .bin copies, never executable inputs for the new
 // installation. Logs and older backups are intentionally excluded.
 func backupMigrationSource(p serviceMigrationPlan, directory string) ([]migrationBackupFile, error) {
@@ -194,17 +216,16 @@ func stageServiceMigration(p serviceMigrationPlan) (migrationStage, error) {
 		return migrationStage{}, err
 	}
 	stage := migrationStage{Directory: directory}
+	recovery := migrationRecoveryMetadata{}
 	stage.Journal = func(status string, cause error) error {
 		message := ""
 		if cause != nil {
 			message = cause.Error()
 		}
-		data, err := json.MarshalIndent(struct {
-			Status     string
-			UpdatedUTC time.Time
-			Error      string
-			Plan       serviceMigrationPlan
-		}{status, time.Now().UTC(), message, p}, "", "  ")
+		data, err := json.MarshalIndent(migrationJournal{
+			SchemaVersion: 1, Status: status, UpdatedUTC: time.Now().UTC(),
+			Error: message, Plan: p, Recovery: recovery,
+		}, "", "  ")
 		if err != nil {
 			return err
 		}
@@ -225,9 +246,11 @@ func stageServiceMigration(p serviceMigrationPlan) (migrationStage, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := writeMigrationBackup(directory, "files.json", append(manifest, '\n')); err != nil {
+	manifest = append(manifest, '\n')
+	if err := writeMigrationBackup(directory, "files.json", manifest); err != nil {
 		return fail(err)
 	}
+	recovery.FilesManifestSHA256 = migrationHash(manifest)
 	original, err := readMigrationFile(root, p.TargetConfig, 4<<20)
 	existed := err == nil
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -237,8 +260,11 @@ func stageServiceMigration(p serviceMigrationPlan) (migrationStage, error) {
 		if err := writeMigrationBackup(directory, "destination-config.json.bin", original); err != nil {
 			return fail(err)
 		}
+		recovery.DestinationExisted = true
+		recovery.DestinationSHA256 = migrationHash(original)
+		recovery.DestinationSize = len(original)
 	}
-	recovery := fmt.Sprintf(`SonDNS migration recovery
+	instructions := fmt.Sprintf(`SonDNS migration recovery
 
 Source EXE: %s
 Source config: %s
@@ -250,9 +276,17 @@ Read journal.json first. "complete" means the transaction finished; "preparing",
 "prepared", "switching" or "bound" after interruption requires manual inspection.
 No automatic recovery runs after a crash or power loss.
 
-The journal contains the previous SCM configuration/state and exact HKLM Run
-value/type. files.json maps SHA-256 hashes and original paths to inert .bin
-backups. Inspect the current service binding/state before making any changes.
+The versioned journal contains the previous SCM configuration/state and exact
+HKLM Run value/type. Recovery.Ready must be true before treating the backup as
+complete. Recovery.FilesManifestSHA256 verifies files.json; that manifest maps
+SHA-256 hashes and original paths to inert legacy .bin backups.
+Recovery.DestinationExisted, DestinationSHA256 and DestinationSize describe the
+exact previous destination-config.json.bin (including an empty file). If no
+destination config existed, there is no such backup. CandidateSHA256 and
+CandidateSize identify the config staged for the new installation. Verify sizes
+and hashes before restoring anything. Old journals without versioned recovery
+metadata require manual inspection; do not assume their backups are complete.
+Inspect the current service binding/state before making any changes.
 Do not overwrite concurrent administrator changes. Restore files only to a
 protected folder; never execute .bin backups directly. Do not start the legacy
 EXE as SYSTEM from an unsafe folder. A failed migration may leave DNS stopped.
@@ -263,7 +297,7 @@ Automatic restart of the legacy source was approved by folder checks: %t
 Backups may contain custom DNS endpoints or credentials. Keep them protected and
 remove them deliberately after a successful migration and recovery review.
 `, p.SourceExe, p.SourceConfig, p.TargetExe, p.TargetConfig, existed, p.CanRestartSource, p.RecoveryLimit)
-	if err := writeMigrationBackup(directory, "RECOVERY.txt", []byte(recovery)); err != nil {
+	if err := writeMigrationBackup(directory, "RECOVERY.txt", []byte(instructions)); err != nil {
 		return fail(err)
 	}
 	// Use only pinned embedded runtime, never legacy executable helpers.
@@ -287,6 +321,8 @@ remove them deliberately after a successful migration and recovery review.
 		return fail(err)
 	}
 	candidate = append(candidate, '\n')
+	recovery.CandidateSHA256, recovery.CandidateSize = migrationHash(candidate), len(candidate)
+	recovery.Ready = true
 	stage.Undo = migrationConfigUndo(root, p.TargetConfig, original, existed, migrationHash(candidate))
 	if err := stage.Journal("prepared", nil); err != nil {
 		return fail(err)

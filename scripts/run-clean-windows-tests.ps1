@@ -72,8 +72,8 @@ try {
   Save-Report
   $stdout = Join-Path $reportRoot 'service-test.log'
   $stderr = Join-Path $reportRoot 'service-test.err'
-  $process = Start-Process -FilePath (Join-Path $KitDirectory 'SonDNS.tests.exe') -ArgumentList @('-test.v','-test.run=^TestWindowsServiceLifecycle$','-test.timeout=180s') -WorkingDirectory $KitDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-  if (-not $process.WaitForExit(200000)) { $process.Kill(); $process.WaitForExit(); throw 'Lifecycle test timed out; inspect surviving service/driver, then restore the VM snapshot or discard the hosted VM' }
+  $process = Start-Process -FilePath (Join-Path $KitDirectory 'SonDNS.tests.exe') -ArgumentList @('-test.v','-test.run=^TestWindowsServiceLifecycle$','-test.timeout=300s') -WorkingDirectory $KitDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  if (-not $process.WaitForExit(320000)) { $process.Kill(); $process.WaitForExit(); throw 'Lifecycle test timed out; inspect surviving service/driver, then restore the VM snapshot or discard the hosted VM' }
   $process.Refresh()
   $report['testExitCode'] = $process.ExitCode
   $log = Get-Content -LiteralPath $stdout -Raw
@@ -89,6 +89,9 @@ try {
     'live GUI migration cancellation: default No, exact state and DNS unchanged',
     'live GUI migration validation failure: actual file lock, no backup, exact state and DNS unchanged',
     'live GUI migration success: confirmation, imported controls and concrete backup path verified',
+    'live interrupted migration verified: prepared;', 'live interrupted migration verified: switching;',
+    'live interrupted migration verified: after-stop;', 'live interrupted migration verified: bound;',
+    'live interrupted migration verified: after-start;', 'live interrupted migration verified: after-tray;',
     'cross-account access verified: standard monitoring allowed; config, SCM and IPC mutations denied',
     'cross-account administrator verified: protected access and authorized IPC log clear',
     'cross-account handoff wait verified: separate administrator waited for the live standard-user process',
@@ -99,8 +102,31 @@ try {
   foreach ($check in $checks) {
     if (-not $log.Contains($check)) { throw "Lifecycle evidence is missing: $check" }
   }
-  if (-not (Test-Path -LiteralPath $env:SONDNS_SERVICE_TEST_LOG -PathType Leaf)) { throw 'Service runtime log is missing' }
   $migration = Get-Content -LiteralPath (Join-Path $reportRoot 'migration.json') -Raw | ConvertFrom-Json
+  $points = @('prepared','switching','after-stop','bound','after-start','after-tray')
+  if (@($migration.Interruptions).Count -ne $points.Count) { throw 'Migration interruption cases are incomplete' }
+  foreach ($point in $points) {
+    $items = @($migration.Interruptions | Where-Object { $_.Point -ceq $point })
+    if ($items.Count -ne 1) { throw "Missing/duplicate migration interruption point: $point" }
+    $item = $items[0]
+    $expectedStatus = if ($point -in @('prepared','switching')) { $point } elseif ($point -ceq 'after-stop') { 'switching' } else { 'bound' }
+    $expectedState = if ($point -in @('after-stop','bound')) { 1 } else { 4 }
+    $expectedBinding = if ($point -in @('bound','after-start','after-tray')) { $migration.AfterMigration.BinaryPathName } else { $migration.Before.BinaryPathName }
+    $expectedTray = if ($point -ceq 'after-tray') { $migration.TrayAfterMigration } else { $migration.TrayBefore }
+    if ($item.Stage -cne 'completed' -or $item.ChildPID -le 0 -or $item.ChildExitCode -ne 173 -or $item.ChildTerminated -ne $true -or
+        $item.GUIUnchanged -ne $true -or $item.ManualRestoreVerified -ne $true -or $item.GUIProcessesReaped -ne 1 -or
+        $item.JournalStatus -cne $expectedStatus -or $item.ServiceState -ne $expectedState -or
+        $item.Binding.BinaryPathName -cne $expectedBinding -or $item.Tray.Kind -ne $expectedTray.Kind -or
+        $item.Tray.Exists -ne $expectedTray.Exists -or $item.Tray.Value -cne $expectedTray.Value -or
+        $item.DNSAvailable -ne ($expectedState -eq 4) -or $item.DNSUnavailable -ne ($expectedState -eq 1) -or
+        $item.Backup.SchemaVersion -ne 1 -or $item.Backup.Recovery.Ready -ne $true -or
+        $item.Backup.Recovery.DestinationExisted -ne $true -or
+        $item.Backup.Recovery.DestinationSHA256 -cne $migration.DestinationConfigBeforeSHA256 -or
+        $item.Backup.Recovery.CandidateSHA256 -cne $item.DestinationSHA256 -or
+        $item.Backup.Recovery.FilesManifestSHA256 -cne $item.Backup.ManifestSHA256 -or
+        $item.JournalSHA256 -cnotmatch '^[a-f0-9]{64}$') { throw "Incomplete interruption/GUI/manual-recovery evidence: $point" }
+  }
+  if (-not (Test-Path -LiteralPath $env:SONDNS_SERVICE_TEST_LOG -PathType Leaf)) { throw 'Service runtime log is missing' }
   if ($migration.RollbackVerified -ne $true -or $migration.MigrationVerified -ne $true -or
       $migration.CleanupVerified -ne $true -or $migration.SCMStartErrorCode -le 0 -or
       $migration.RollbackBackup.Status -cne 'rolled-back' -or $migration.CompletedBackup.Status -cne 'complete' -or

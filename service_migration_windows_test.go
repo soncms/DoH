@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -208,6 +209,7 @@ func TestMigrationProtectedBackupAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireMigrationRecoveryMetadata(t, stage.Directory, configPath, nil, false)
 	data, err := os.ReadFile(filepath.Join(stage.Directory, "legacy", "SonDNS.exe.bin"))
 	if err != nil || migrationHash(data) != p.SourceExeHash {
 		t.Fatal("legacy EXE backup missing or changed")
@@ -234,6 +236,7 @@ func TestMigrationProtectedBackupAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireMigrationRecoveryMetadata(t, stage.Directory, configPath, []byte("original destination bytes"), true)
 	if err := stage.Undo(); err != nil {
 		t.Fatal(err)
 	}
@@ -241,6 +244,21 @@ func TestMigrationProtectedBackupAndSettings(t *testing.T) {
 	if string(data) != "original destination bytes" {
 		t.Fatal("destination bytes not restored")
 	}
+	// An empty previous file is distinct from a config that did not exist.
+	migrationTestWrite(t, configPath, nil)
+	stage, err = stageServiceMigration(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireMigrationRecoveryMetadata(t, stage.Directory, configPath, nil, true)
+	if err := stage.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("empty destination config was not restored: %v", err)
+	}
+	migrationTestWrite(t, configPath, []byte("original destination bytes"))
 	migrationTestWrite(t, oldConfig, []byte("changed source"))
 	if _, err := stageServiceMigration(p); err == nil {
 		t.Fatal("changed source was staged")
@@ -255,5 +273,38 @@ func TestMigrationProtectedBackupAndSettings(t *testing.T) {
 	migrationTestWrite(t, oldConfig, raw)
 	if _, err := prepareServiceMigration(previous, svc.Running, target, configPath); err == nil {
 		t.Fatal("custom legacy helper arguments imported")
+	}
+}
+
+func requireMigrationRecoveryMetadata(t *testing.T, directory, candidatePath string, original []byte, existed bool) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(directory, "journal.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var journal migrationJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(directory, "files.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := os.ReadFile(candidatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := journal.Recovery
+	if journal.SchemaVersion != 1 || journal.Status != "prepared" || !r.Ready || r.FilesManifestSHA256 != migrationHash(manifest) ||
+		r.DestinationExisted != existed || r.CandidateSHA256 != migrationHash(candidate) || r.CandidateSize != len(candidate) {
+		t.Fatalf("recovery metadata missing or inconsistent: %+v", journal)
+	}
+	backup, err := os.ReadFile(filepath.Join(directory, "destination-config.json.bin"))
+	if existed {
+		if err != nil || !bytes.Equal(backup, original) || r.DestinationSHA256 != migrationHash(original) || r.DestinationSize != len(original) {
+			t.Fatalf("previous destination metadata/backup incorrect: %+v error %v", r, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) || r.DestinationSHA256 != "" || r.DestinationSize != 0 {
+		t.Fatal("absent destination was recorded as an empty existing file")
 	}
 }

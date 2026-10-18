@@ -121,6 +121,16 @@ only after a non-skipped pass; record the remaining cases below:
   recovery; no automatic recovery should run. Reject custom helper arguments,
   junction/hardlink sources and backup size/count limits without interrupting DNS.
 
+The hosted lifecycle now includes six deterministic TerminateProcess boundaries
+using the real migration transaction and native SCM/tray/file hooks. It verifies
+the persisted journal and exact backup/candidate hashes, unchanged state during
+a one-second real GUI startup observation, and an explicit manual restoration
+with DNS recovery. This requires a non-skipped pass on the changed commit and
+does not establish physical power loss, partially persisted disk writes or reboot.
+Schema 1 recovery metadata distinguishes absent/empty previous destination
+configs and records their hash/size plus candidate and legacy-manifest hashes.
+Never infer backup completeness from an older unversioned journal.
+
 ## Evidence and publication
 
 Save the exact steps, screenshots, source/artifact hashes and resulting SCM,

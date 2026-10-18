@@ -160,6 +160,9 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 		requireNoLifecycleDPI(t, targetHelper)
 		requireLifecycleMigrationDNS(t, settings.Listen)
 	})
+	runLifecycleMigrationInterruptions(t, s, p, targetBefore, parent, backups, &report.Interruptions)
+	oldDPI = waitForLifecycleDPI(t, sourceHelper, 0)
+	p = prepare()
 	locked := &lockedLifecycleMigration{scmMigrationService: scmMigrationService{s}, target: target}
 	backup, err := executeServiceMigration(p, locked, nativeMigrationHooks(p))
 	if backup != "" {
@@ -260,6 +263,8 @@ type lifecycleMigrationBackupReport struct {
 	FilesVerified  int
 	RuntimeFiles   int
 	ManifestSHA256 string
+	SchemaVersion  int
+	Recovery       migrationRecoveryMetadata
 }
 
 type lifecycleMigrationReport struct {
@@ -274,6 +279,7 @@ type lifecycleMigrationReport struct {
 	RollbackBackup, CompletedBackup                             lifecycleMigrationBackupReport
 	RollbackVerified, MigrationVerified, CleanupVerified        bool
 	GUI                                                         lifecycleMigrationGUIReport
+	Interruptions                                               []lifecycleMigrationInterruptionReport
 }
 
 func readLifecycleMigrationFile(t *testing.T, path string) []byte {
@@ -332,10 +338,7 @@ func requireLifecycleMigrationDNS(t *testing.T, address string) {
 func verifyLifecycleMigrationBackup(t *testing.T, backup, status string, p serviceMigrationPlan, destinationBefore []byte) lifecycleMigrationBackupReport {
 	t.Helper()
 	journal := readLifecycleMigrationFile(t, filepath.Join(backup, "journal.json"))
-	var record struct {
-		Status string
-		Plan   serviceMigrationPlan
-	}
+	var record migrationJournal
 	if err := json.Unmarshal(journal, &record); err != nil || record.Status != status || !reflect.DeepEqual(record.Plan, p) {
 		t.Fatalf("migration journal: %+v %v", record, err)
 	}
@@ -344,7 +347,18 @@ func verifyLifecycleMigrationBackup(t *testing.T, backup, status string, p servi
 	if err := json.Unmarshal(manifest, &files); err != nil {
 		t.Fatal(err)
 	}
-	result := lifecycleMigrationBackupReport{Status: status, ManifestSHA256: migrationHash(manifest)}
+	candidate, err := json.MarshalIndent(p.Settings, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate = append(candidate, '\n')
+	if record.SchemaVersion != 1 || !record.Recovery.Ready ||
+		record.Recovery.FilesManifestSHA256 != migrationHash(manifest) || !record.Recovery.DestinationExisted ||
+		record.Recovery.DestinationSHA256 != migrationHash(destinationBefore) || record.Recovery.DestinationSize != len(destinationBefore) ||
+		record.Recovery.CandidateSHA256 != migrationHash(candidate) || record.Recovery.CandidateSize != len(candidate) {
+		t.Fatalf("migration recovery metadata does not describe the actual backup/candidate bytes: %+v", record.Recovery)
+	}
+	result := lifecycleMigrationBackupReport{Status: status, ManifestSHA256: migrationHash(manifest), SchemaVersion: record.SchemaVersion, Recovery: record.Recovery}
 	sawExe, sawConfig := false, false
 	for _, file := range files {
 		if !insideRoot(backup, filepath.Join(backup, file.Backup)) || !strings.HasSuffix(file.Backup, ".bin") ||
