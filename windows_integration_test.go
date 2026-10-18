@@ -28,6 +28,9 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	if os.Getenv("SONDNS_SERVICE_TEST") != "1" {
 		t.Skip("set SONDNS_SERVICE_TEST=1 as Administrator")
 	}
+	if os.Getenv("SONDNS_ACCOUNT_TEST") != "1" {
+		t.Fatal("lifecycle also creates temporary local accounts; use the opted-in disposable Windows test runner")
+	}
 	before, err := queryServiceSnapshot()
 	if err != nil {
 		t.Fatal(err)

@@ -95,8 +95,13 @@ IPC log snapshots must work; config write, SCM
 mutation handles, pipe-server creation and IPC mutations must be denied. The
 separate elevated administrator must be able to open management handles and
 clear the actual service log. Config bytes must stay unchanged and DNS must
-remain usable. A live windowless standard-user child additionally checks the
-production PID handoff wait from the other administrator's token. Both accounts
+remain usable. A live windowless copy of the test harness under the standard
+account additionally checks the production PID handoff wait from the other
+administrator's token. Waiting must be denied before preparation. The child
+uses the production helper on its own process to grant Administrators only
+SYNCHRONIZE, verifies exact DACL restoration, then prepares again. The other
+admin must wait successfully while terminate, memory-write and DACL-change
+access remain denied. Both accounts
 and the owned child must be removed/exited and reported in `accounts.json`.
 This procedure requires an explicit pass on the tested commit. It does not
 operate the Manage button, credential prompt, secure desktop or GUI/tray under
@@ -105,6 +110,9 @@ Batch logon avoids using an identification-only UAC linked token as an
 impersonation token; it is a backend access check, not interactive elevation.
 Native service monitoring uses SCM plus IPC `snapshot`; the optional IPC
 `state` operation is implemented by the console engine, not the native engine.
+The actual credential prompt/cancellation remains manual. The production launch
+path restores process permissions if ShellExecute fails or is cancelled;
+after a successful launch the wait-only grant remains until the old GUI exits.
 
 This does not establish alternate-account UAC, reboot/tray startup,
 all migration failure stages, DPI effectiveness/application compatibility,

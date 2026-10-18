@@ -106,5 +106,9 @@ Thông báo giấy phép và nguồn của các thành phần tích hợp nằm 
 
 ```powershell
 $env:SONDNS_UI_TEST = '1'; go test -run TestNativeLayout -count=1 -v; Remove-Item Env:SONDNS_UI_TEST
-$env:SONDNS_SERVICE_TEST = '1'; go test -run TestWindowsServiceLifecycle -count=1 -v; Remove-Item Env:SONDNS_SERVICE_TEST
 ```
+
+Kiểm thử lifecycle cài service/driver thật và tạo hai tài khoản Windows tạm.
+Chỉ chạy trên VM sạch dùng riêng cho test, theo [bộ chạy kiểm thử Windows](CLEAN_WINDOWS_TESTS.md)
+hoặc workflow disposable trên GitHub Actions. Bộ chạy kiểm tra điều kiện và bật
+riêng các opt-in service/account; không chạy lifecycle trên máy đang dùng SonDNS.

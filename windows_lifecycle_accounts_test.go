@@ -44,6 +44,9 @@ type lifecycleAccountsReport struct {
 	Standard, Administrator                                  lifecycleAccountReport
 	ChildPID                                                 uint32
 	HandoffWait                                              time.Duration
+	HandoffBeforeDenied                                      uint32
+	HandoffControlDenied                                     map[string]uint32
+	HandoffAccess                                            lifecycleHandoffAccessReport
 	StandardVerified, AdministratorVerified, HandoffVerified bool
 	ChildExited, AccountsRemoved                             bool
 }
@@ -377,13 +380,50 @@ func lifecycleLogHasID(t *testing.T, id uint64) bool {
 
 func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount, cwd string, report *lifecycleAccountsReport) {
 	t.Helper()
-	system, err := windows.GetSystemDirectory()
+	source, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	exe := filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe")
+	// Use this harness under the real standard account so the child can call
+	// the production permission-preparation function on its own process.
+	exe := filepath.Join(cwd, "handoff-fixture.tests.exe")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(exe)
+	childReport := filepath.Join(cwd, "handoff-fixture-result.json")
+	if err := os.WriteFile(childReport, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if data, err := os.ReadFile(childReport); err == nil && len(data) != 0 {
+			if err := json.Unmarshal(data, &report.HandoffAccess); err != nil {
+				t.Errorf("decode handoff child diagnostic report: %v", err)
+			}
+		}
+	}()
+	sd, err := windows.SecurityDescriptorFromString(fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;%s)", standard.report.SID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(childReport, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	prefix := `Local\SonDNS.Handoff.` + rand.Text()
+	events := newLifecycleHandoffEvents(t, prefix, standard.report.SID)
 	application, _ := windows.UTF16PtrFromString(exe)
-	command, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{exe, "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 2"}))
+	command, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{exe,
+		"-test.run=^TestLifecycleGUIHandoffAccountChild$", "-test.timeout=30s",
+		"-sondns-handoff-events=" + prefix, "-sondns-handoff-report=" + childReport}))
 	directory, _ := windows.UTF16PtrFromString(cwd)
 	startup := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{})), Flags: windows.STARTF_USESHOWWINDOW, ShowWindow: windows.SW_HIDE}
 	var child windows.ProcessInformation
@@ -416,11 +456,41 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		t.Fatalf("wait child identity differs: %v", err)
 	}
 	report.ChildSID = user.User.Sid.String()
+	waitLifecycleHandoffEvent(t, events["alive"], "standard-account child startup")
 	state, err := windows.WaitForSingleObject(child.Process, 0)
 	if err != nil || state != uint32(windows.WAIT_TIMEOUT) {
 		t.Fatalf("account wait fixture already exited: %d %v", state, err)
 	}
 	admin.as(func() {
+		h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, child.ProcessId)
+		if err == nil {
+			_ = windows.CloseHandle(h)
+		}
+		if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+			t.Fatalf("default cross-account wait was not denied before preparation: %v", err)
+		}
+		report.HandoffBeforeDenied = uint32(windows.ERROR_ACCESS_DENIED)
+	})
+	if err := windows.SetEvent(events["prepare"]); err != nil {
+		t.Fatal(err)
+	}
+	waitLifecycleHandoffEvent(t, events["ready"], "production permission preparation and exact restoration")
+	report.HandoffControlDenied = make(map[string]uint32)
+	admin.as(func() {
+		for label, access := range map[string]uint32{"terminate": windows.PROCESS_TERMINATE,
+			"writeMemory": windows.PROCESS_VM_WRITE, "changeDACL": windows.WRITE_DAC} {
+			h, err := windows.OpenProcess(access, false, child.ProcessId)
+			if err == nil {
+				_ = windows.CloseHandle(h)
+			}
+			if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+				t.Fatalf("wait preparation unexpectedly permitted %s: %v", label, err)
+			}
+			report.HandoffControlDenied[label] = uint32(windows.ERROR_ACCESS_DENIED)
+		}
+		// The event keeps the child live until the wait has actually begun.
+		timer := time.AfterFunc(300*time.Millisecond, func() { _ = windows.SetEvent(events["exit"]) })
+		defer timer.Stop()
 		started := time.Now()
 		err = waitForGUIHandoff(child.ProcessId)
 		report.HandoffWait = time.Since(started)
@@ -436,6 +506,10 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 	var exit uint32
 	if err := windows.GetExitCodeProcess(child.Process, &exit); err != nil || exit != 0 {
 		t.Fatalf("account child did not exit normally: %d %v", exit, err)
+	}
+	if err := json.Unmarshal(readLifecycleMigrationFile(t, childReport), &report.HandoffAccess); err != nil ||
+		!report.HandoffAccess.RestoreVerified || report.HandoffAccess.Failed || report.HandoffAccess.Stage != "completed" {
+		t.Fatalf("child did not verify production DACL grant/restoration: %v", err)
 	}
 	report.HandoffVerified = true
 	t.Log("cross-account handoff wait verified: separate administrator waited for the live standard-user process")

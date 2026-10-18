@@ -126,6 +126,10 @@ try {
       $accounts.Standard.PipeCreateDenied -ne 5 -or @($accounts.Standard.RejectedOperations).Count -ne 2 -or
       $accounts.Standard.Removed -ne $true -or $accounts.Administrator.Removed -ne $true -or
       $accounts.Administrator.LogClearAllowed -ne $true -or $accounts.HandoffError -or
+      $accounts.HandoffBeforeDenied -ne 5 -or $accounts.HandoffAccess.RestoreVerified -ne $true -or
+      $accounts.HandoffAccess.Failed -ne $false -or $accounts.HandoffAccess.Stage -cne 'completed' -or
+      $accounts.HandoffControlDenied.terminate -ne 5 -or $accounts.HandoffControlDenied.writeMemory -ne 5 -or
+      $accounts.HandoffControlDenied.changeDACL -ne 5 -or
       $accounts.ChildSID -cne $accounts.Standard.SID -or $accounts.CreatorSID -ceq $accounts.Standard.SID -or
       $accounts.CreatorSID -ceq $accounts.Administrator.SID -or $accounts.Standard.SID -ceq $accounts.Administrator.SID) {
     throw 'The real cross-account access/handoff/cleanup report is incomplete'

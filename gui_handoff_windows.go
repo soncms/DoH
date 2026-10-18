@@ -37,7 +37,23 @@ func launchPortableGUI(exe, config string, elevate bool, previousPID uint32) err
 	if err != nil {
 		return err
 	}
-	return windows.ShellExecute(0, v, f, args, cwd, windows.SW_SHOWNORMAL)
+	var restore func() error
+	if elevate && previousPID != 0 {
+		if previousPID != uint32(os.Getpid()) {
+			return errors.New("can only prepare handoff access for the current GUI process")
+		}
+		restore, err = prepareGUIHandoffAccess()
+		if err != nil {
+			return err
+		}
+	}
+	err = windows.ShellExecute(0, v, f, args, cwd, windows.SW_SHOWNORMAL)
+	if err != nil && restore != nil {
+		if restoreErr := restore(); restoreErr != nil {
+			return fmt.Errorf("launch failed (%v); restore handoff permissions: %w", err, restoreErr)
+		}
+	}
+	return err
 }
 
 func waitForGUIHandoff(pid uint32) error {

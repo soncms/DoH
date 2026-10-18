@@ -42,6 +42,10 @@ The standard account uses an interactive logon; the administrator uses a batch
 logon. The fixture does not modify UAC or logon-right policies.
 It reads native service state through the production SCM query and log rows
 through IPC `snapshot`; it does not require console-only IPC `state` support.
+The standard-account process must initially deny a different admin's wait.
+After the production preparation helper grants only SYNCHRONIZE, a native wait
+must succeed while process control access remains denied. The child also
+verifies exact DACL restoration; actual UAC cancellation still needs review.
 
 The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
 address and scoped link-local address, with timeout controls before/after the
