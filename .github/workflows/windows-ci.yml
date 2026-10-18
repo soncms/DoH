@@ -27,6 +27,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Scan known Go vulnerabilities and retain qualified findings
+        timeout-minutes: 5
+        run: ./scripts/scan-go-vulnerabilities.ps1 -OutputDirectory "$env:RUNNER_TEMP/go-vulnerability-scan"
       - name: Verify runtime assets and core race tests
         env:
           SONDNS_FILESYSTEM_TEST_PARENT: 'C:\'
@@ -80,5 +83,6 @@ jobs:
             ${{ runner.temp }}/gui-tests.json
             ${{ runner.temp }}/scm-startup-tests.json
             ${{ runner.temp }}/scm-migration-tests.json
+            ${{ runner.temp }}/go-vulnerability-scan/
           if-no-files-found: ignore
           retention-days: 7

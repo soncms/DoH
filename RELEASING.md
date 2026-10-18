@@ -86,6 +86,11 @@ apply; a rebuilt driver does not inherit the upstream driver's signature.
 
 ## Verification
 
+Windows CI runs the online [known Go vulnerability gate](docs/DEPENDENCY_SECURITY.md)
+before the other checks and retains its qualified findings and source/module
+provenance. Review that report for the exact release source; it does not scan
+native runtime binaries or replace the release security review.
+
 The Windows CI workflow builds and checks source packages without publishing
 EXEs or source archives. Core tests use the race detector. Native widget tests
 run separately because the Walk/win integer-resource pointer path currently

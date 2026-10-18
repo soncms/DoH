@@ -38,5 +38,10 @@ DNS transport encryption does not hide requests from the resolver. See
 kernel, operating system or upstream resolver.
 
 See [RELEASING.md](RELEASING.md) for validation and remaining clean-machine checks.
+Windows CI also runs a [known Go vulnerability gate](docs/DEPENDENCY_SECURITY.md).
+It retains module-only matches and local replacement provenance, and checks
+canonical upstream baselines for local replacements through OSV. A baseline
+match blocks pending source review without proving the patched code exploitable.
+A pass is scoped to the analyzed Go source graph and database snapshots.
 Do not disable Windows security software to run a preview or treat passing unit
 tests as a completed kernel-driver security review.
