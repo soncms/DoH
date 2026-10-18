@@ -43,6 +43,10 @@ logon. The fixture does not modify UAC or logon-right policies.
 It reads native service state through the production SCM query and log rows
 through IPC `snapshot`; it does not require console-only IPC `state` support.
 The standard-account process must initially deny a different admin's wait.
+Fixture synchronization uses four anonymous event handles explicitly duplicated
+with SYNCHRONIZE/EVENT_MODIFY_STATE into the suspended child, then recorded in a
+SID-readable manifest before resume. No process rights or caller handles are
+inherited, and named-event security is outside this fixture's scope.
 After the production preparation helper grants only SYNCHRONIZE, a native wait
 must succeed while process control access remains denied. The child also
 verifies exact DACL restoration; actual UAC cancellation still needs review.

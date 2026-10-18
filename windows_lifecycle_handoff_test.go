@@ -6,16 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"syscall"
 	"testing"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-var lifecycleHandoffEvents = flag.String("sondns-handoff-events", "", "owned account-fixture event prefix")
+var lifecycleHandoffEvents = flag.String("sondns-handoff-events", "", "owned account-fixture handle manifest")
 var lifecycleHandoffReport = flag.String("sondns-handoff-report", "", "owned account-fixture result file")
 
 type lifecycleHandoffAccessReport struct {
@@ -25,6 +23,7 @@ type lifecycleHandoffAccessReport struct {
 	Failed                    bool
 	Error                     string
 	NativeError, SessionID    uint32
+	EventHandlesVerified      int
 }
 
 // This child only changes its own process DACL. It never starts a GUI, service,
@@ -63,15 +62,31 @@ func TestLifecycleGUIHandoffAccountChild(t *testing.T) {
 		t.Fatal(report.Error)
 	}
 	check("query child session", windows.ProcessIdToSessionId(uint32(os.Getpid()), &report.SessionID))
-	report.Stage = "open-events"
+	report.Stage = "read-event-handles"
+	data, err := os.ReadFile(*lifecycleHandoffEvents)
+	check("read event handle manifest", err)
 	events := make(map[string]windows.Handle)
+	check("decode event handle manifest", json.Unmarshal(data, &events))
+	if len(events) != 4 {
+		report.Error = "event handle manifest must contain exactly four owned handles"
+		t.Fatal(report.Error)
+	}
+	seen := make(map[windows.Handle]bool)
 	for _, label := range []string{"alive", "prepare", "ready", "exit"} {
-		name, err := windows.UTF16PtrFromString(*lifecycleHandoffEvents + "." + label)
-		check("encode event name", err)
-		h, err := windows.OpenEvent(windows.SYNCHRONIZE|windows.EVENT_MODIFY_STATE, false, name)
-		check("OpenEvent "+label, err)
+		h := events[label]
+		if h == 0 || h == windows.InvalidHandle || seen[h] {
+			report.Error = "invalid or duplicate owned event handle: " + label
+			t.Fatal(report.Error)
+		}
+		seen[h] = true
 		defer windows.CloseHandle(h)
-		events[label] = h
+		state, err := windows.WaitForSingleObject(h, 0)
+		check("probe event handle "+label, err)
+		if state != uint32(windows.WAIT_TIMEOUT) {
+			report.Error = "owned event was already signalled: " + label
+			t.Fatal(report.Error)
+		}
+		report.EventHandlesVerified++
 	}
 	check("signal startup", windows.SetEvent(events["alive"]))
 	waitLifecycleHandoffEvent(t, events["prepare"], "parent preparation request")
@@ -106,22 +121,18 @@ func TestLifecycleGUIHandoffAccountChild(t *testing.T) {
 	report.Stage = "completed"
 }
 
-func newLifecycleHandoffEvents(t *testing.T, prefix, sid string) map[string]windows.Handle {
+func newLifecycleHandoffEvents(t *testing.T) map[string]windows.Handle {
 	t.Helper()
-	sd, err := windows.SecurityDescriptorFromString(fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x100002;;;%s)S:(ML;;NW;;;ME)", sid))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 	events := make(map[string]windows.Handle)
 	for _, label := range []string{"alive", "prepare", "ready", "exit"} {
-		name, _ := windows.UTF16PtrFromString(prefix + "." + label)
-		h, err := windows.CreateEvent(sa, 1, 0, name)
+		// Anonymous, non-inheritable events have no cross-account name/ACL
+		// lookup. Only explicitly duplicated wait/signal handles reach the child.
+		h, err := windows.CreateEvent(nil, 1, 0, nil)
 		if h != 0 {
 			t.Cleanup(func() { _ = windows.CloseHandle(h) })
 		}
 		if err != nil {
-			t.Fatalf("create unique owned handoff event: %v", err)
+			t.Fatalf("create owned handoff event: %v", err)
 		}
 		events[label] = h
 	}

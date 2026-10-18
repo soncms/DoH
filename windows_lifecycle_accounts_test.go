@@ -49,6 +49,8 @@ type lifecycleAccountsReport struct {
 	HandoffWait                                              time.Duration
 	HandoffBeforeDenied                                      uint32
 	HandoffControlDenied                                     map[string]uint32
+	HandoffRendezvous                                        string
+	HandoffEventCount, HandoffEventAccess                    uint32
 	HandoffAccess                                            lifecycleHandoffAccessReport
 	StandardVerified, AdministratorVerified, HandoffVerified bool
 	ChildExited, AccountsRemoved                             bool
@@ -421,25 +423,27 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Explicitly use the global event namespace; logon-token session IDs may
-	// differ from the runner's even though process handles are system-wide.
-	prefix := `Global\SonDNS.Handoff.` + rand.Text()
-	events := newLifecycleHandoffEvents(t, prefix, standard.report.SID)
+	// Start suspended so only these four non-inheritable event handles are
+	// explicitly duplicated into the child before any child code can run.
+	// This fixture rendezvous never grants rights to the child's process DACL.
+	manifest := filepath.Join(cwd, "handoff-fixture-events.json")
+	defer os.Remove(manifest)
+	events := newLifecycleHandoffEvents(t)
 	application, _ := windows.UTF16PtrFromString(exe)
 	command, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{exe,
 		"-test.run=^TestLifecycleGUIHandoffAccountChild$", "-test.timeout=30s",
-		"-sondns-handoff-events=" + prefix, "-sondns-handoff-report=" + childReport}))
+		"-sondns-handoff-events=" + manifest, "-sondns-handoff-report=" + childReport}))
 	directory, _ := windows.UTF16PtrFromString(cwd)
 	startup := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{})), Flags: windows.STARTF_USESHOWWINDOW, ShowWindow: windows.SW_HIDE}
 	environment := lifecycleHandoffEnvironment(t)
 	var child windows.ProcessInformation
 	ok, _, err := lifecycleCreateWithToken.Call(uintptr(standard.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
-		windows.CREATE_NO_WINDOW|windows.CREATE_UNICODE_ENVIRONMENT, uintptr(unsafe.Pointer(&environment[0])),
+		windows.CREATE_NO_WINDOW|windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_SUSPENDED, uintptr(unsafe.Pointer(&environment[0])),
 		uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
 	if ok == 0 {
 		t.Fatalf("start owned standard-account wait fixture: %v", err)
 	}
-	_ = windows.CloseHandle(child.Thread)
+	defer windows.CloseHandle(child.Thread)
 	defer func() {
 		state, err := windows.WaitForSingleObject(child.Process, 0)
 		if err == nil && state == uint32(windows.WAIT_TIMEOUT) {
@@ -474,6 +478,39 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 	}
 	if err := windows.ProcessIdToSessionId(child.ProcessId, &report.ChildSessionID); err != nil {
 		t.Fatal(err)
+	}
+	childEvents := make(map[string]windows.Handle)
+	const eventAccess = windows.SYNCHRONIZE | windows.EVENT_MODIFY_STATE
+	for label, event := range events {
+		var target windows.Handle
+		if err := windows.DuplicateHandle(windows.CurrentProcess(), event, child.Process, &target, eventAccess, false, 0); err != nil {
+			t.Fatalf("duplicate owned %s event into suspended child: %v", label, err)
+		}
+		childEvents[label] = target // Closed by the child or OS on failed startup.
+	}
+	encoded, err := json.Marshal(childEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifestSD, err := windows.SecurityDescriptorFromString(fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;%s)", standard.report.SID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDACL, _, err := manifestSD.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(manifest, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, manifestDACL, nil); err != nil {
+		t.Fatal(err)
+	}
+	report.HandoffRendezvous = "duplicated-anonymous-events"
+	report.HandoffEventCount, report.HandoffEventAccess = uint32(len(childEvents)), eventAccess
+	if count, err := windows.ResumeThread(child.Thread); err != nil || count != 1 {
+		t.Fatalf("resume owned standard-account child: prior suspend count=%d error=%v", count, err)
 	}
 	waitLifecycleHandoffChildEvent(t, events["alive"], child.Process, "standard-account startup")
 	state, err := windows.WaitForSingleObject(child.Process, 0)

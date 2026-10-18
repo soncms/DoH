@@ -98,6 +98,11 @@ clear the actual service log. Config bytes must stay unchanged and DNS must
 remain usable. A live windowless copy of the test harness under the standard
 account additionally checks the production PID handoff wait from the other
 administrator's token. Waiting must be denied before preparation. The child
+starts suspended and receives exactly four explicitly duplicated anonymous
+event handles with wait/signal access only, through a SID-readable manifest.
+It inherits no caller handles or CI environment. These synchronization handles
+do not grant access to the child process and do not use named-event ACLs.
+The child
 uses the production helper on its own process to grant Administrators only
 SYNCHRONIZE, verifies exact DACL restoration, then prepares again. The other
 admin must wait successfully while terminate, memory-write and DACL-change

@@ -129,6 +129,12 @@ try {
       $accounts.Administrator.LogClearAllowed -ne $true -or $accounts.HandoffError -or
       $accounts.HandoffBeforeDenied -ne 5 -or $accounts.HandoffAccess.RestoreVerified -ne $true -or
       $accounts.HandoffAccess.Failed -ne $false -or $accounts.HandoffAccess.Stage -cne 'completed' -or
+      $accounts.HandoffAccess.Error -or $accounts.HandoffAccess.NativeError -ne 0 -or
+      $accounts.HandoffAccess.SessionID -ne $accounts.ChildSessionID -or $accounts.HandoffWait -le 0 -or
+      -not $accounts.HandoffAccess.Before -or $accounts.HandoffAccess.Before -cne $accounts.HandoffAccess.Restored -or
+      $accounts.HandoffAccess.Before -ceq $accounts.HandoffAccess.Granted -or
+      $accounts.HandoffRendezvous -cne 'duplicated-anonymous-events' -or $accounts.HandoffEventCount -ne 4 -or
+      $accounts.HandoffEventAccess -ne 0x100002 -or $accounts.HandoffAccess.EventHandlesVerified -ne 4 -or
       $accounts.HandoffControlDenied.terminate -ne 5 -or $accounts.HandoffControlDenied.writeMemory -ne 5 -or
       $accounts.HandoffControlDenied.changeDACL -ne 5 -or
       $accounts.ChildSID -cne $accounts.Standard.SID -or $accounts.CreatorSID -ceq $accounts.Standard.SID -or
