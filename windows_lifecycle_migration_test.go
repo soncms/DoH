@@ -164,14 +164,34 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 	oldDPI = waitForLifecycleDPI(t, sourceHelper, 0)
 	p = prepare()
 	locked := &lockedLifecycleMigration{scmMigrationService: scmMigrationService{s}, target: target}
-	backup, err := executeServiceMigration(p, locked, nativeMigrationHooks(p))
+	defer func() {
+		if err := locked.release(); err != nil {
+			t.Errorf("release owned candidate image lock: %v", err)
+		}
+	}()
+	hooks := nativeMigrationHooks(p)
+	validateSource := hooks.ValidateSource
+	hooks.ValidateSource = func() error {
+		// Demonstrate the old full validation is still blocked by the candidate,
+		// then exercise the product's source-only restart validation.
+		candidateErr := validateMigrationFiles(p)
+		if !errors.Is(candidateErr, windows.ERROR_SHARING_VIOLATION) {
+			t.Fatalf("candidate must remain unreadable during rollback validation: %v", candidateErr)
+		}
+		report.CandidateValidationError, report.CandidateValidationErrorCode = candidateErr.Error(), uint32(windows.ERROR_SHARING_VIOLATION)
+		err := validateSource()
+		report.SourceRestartValidationPassed = err == nil
+		return err
+	}
+	backup, err := executeServiceMigration(p, locked, hooks)
 	if backup != "" {
 		backups["rollback"] = backup
 	}
-	if err == nil || !locked.acquired || locked.startErr == nil || locked.startErrCode == 0 || !errors.Is(err, locked.startErr) || locked.starts != 2 {
+	if err == nil || !locked.acquired || locked.startErr == nil || locked.startErrCode == 0 || !errors.Is(err, locked.startErr) || locked.starts != 2 || !locked.sourceRestartWithLock {
 		t.Fatalf("expected real locked-image SCM failure and old-service restart: acquired=%t starts=%d SCM=%v migration=%v",
 			locked.acquired, locked.starts, locked.startErr, err)
 	}
+	report.CandidateLockHeldDuringRestart = locked.sourceRestartWithLock
 	report.SCMStartError, report.SCMStartErrorCode = locked.startErr.Error(), locked.startErrCode
 	report.AfterRollback = requireLifecycleMigrationService(t, s, initial)
 	report.TrayAfterRollback = requireLifecycleMigrationTray(t, trayBefore)
@@ -179,16 +199,28 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 		!bytes.Equal(readLifecycleMigrationFile(t, sourceConfig), sourceBefore) {
 		t.Fatal("rollback did not preserve exact destination/source config bytes")
 	}
-	if err := validateMigrationFiles(p); err != nil {
+	if err := validateMigrationSourceForRestart(p); err != nil {
 		t.Fatal(err)
 	}
 	requireLifecycleDPIExited(t, oldDPI)
 	restoredDPI := waitForLifecycleDPI(t, sourceHelper, oldDPI.pid)
 	requireNoLifecycleDPI(t, targetHelper)
 	requireLifecycleMigrationDNS(t, settings.Listen)
+	if !errors.Is(validateMigrationFiles(p), windows.ERROR_SHARING_VIOLATION) || locked.lock == 0 {
+		t.Fatal("candidate image lock did not survive through old-service DNS recovery")
+	}
+	report.DNSRecoveredWithCandidateLocked = true
 	report.RollbackBackup = verifyLifecycleMigrationBackup(t, backup, "rolled-back", p, targetBefore)
+	if err := locked.release(); err != nil {
+		t.Fatal(err)
+	}
+	report.CandidateLockReleased = true
+	if err := validateMigrationFiles(p); err != nil {
+		t.Fatal(err)
+	}
 	report.RollbackVerified = true
 	t.Logf("live migration rollback after real SCM startup failure: %s (code %d); old DNS restored", locked.startErr, locked.startErrCode)
+	t.Log("live migration rollback kept candidate image locked through old-service DNS recovery")
 
 	p = prepare()
 	backup = runLifecycleGUIMigrate(t, p, &report.GUI)
@@ -227,35 +259,51 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 
 type lockedLifecycleMigration struct {
 	scmMigrationService
-	target       string
-	starts       int
-	acquired     bool
-	startErr     error
-	startErrCode uint32
+	target                string
+	starts                int
+	acquired              bool
+	startErr              error
+	startErrCode          uint32
+	lock                  windows.Handle
+	sourceRestartWithLock bool
+}
+
+func (s *lockedLifecycleMigration) release() error {
+	if s.lock == 0 {
+		return nil
+	}
+	err := windows.CloseHandle(s.lock)
+	if err == nil {
+		s.lock = 0
+	}
+	return err
 }
 
 func (s *lockedLifecycleMigration) StartAndWait() error {
 	s.starts++
 	if s.starts != 1 {
+		s.sourceRestartWithLock = s.lock != 0
 		return s.scmMigrationService.StartAndWait()
 	}
 	name, err := windows.UTF16PtrFromString(s.target)
 	if err != nil {
 		return err
 	}
-	// Lock only the candidate image during the actual SCM start. Do not corrupt
-	// any files or return a synthetic failure in place of Windows' own result.
+	// Keep only the candidate image locked through the actual SCM failure,
+	// rollback, old-service restart and DNS probe. Never corrupt any file or
+	// substitute a synthetic error for Windows' result.
 	h, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return err
 	}
+	s.lock = h
 	s.acquired = true
 	s.startErr = s.scmMigrationService.StartAndWait()
 	var errno windows.Errno
 	if errors.As(s.startErr, &errno) {
 		s.startErrCode = uint32(errno)
 	}
-	return errors.Join(s.startErr, windows.CloseHandle(h))
+	return s.startErr
 }
 
 type lifecycleMigrationBackupReport struct {
@@ -268,18 +316,22 @@ type lifecycleMigrationBackupReport struct {
 }
 
 type lifecycleMigrationReport struct {
-	Before, AfterRollback, AfterMigration                       mgr.Config
-	TrayBefore, TrayAfterRollback, TrayAfterMigration           migrationTrayValue
-	SourceExeSHA256, SourceConfigSHA256                         string
-	DestinationConfigBeforeSHA256, DestinationConfigAfterSHA256 string
-	SCMStartError                                               string
-	SCMStartErrorCode                                           uint32
-	SourceDPIPID, RestoredDPIPID, TargetDPIPID                  uint32
-	ImportedSettings                                            Config
-	RollbackBackup, CompletedBackup                             lifecycleMigrationBackupReport
-	RollbackVerified, MigrationVerified, CleanupVerified        bool
-	GUI                                                         lifecycleMigrationGUIReport
-	Interruptions                                               []lifecycleMigrationInterruptionReport
+	Before, AfterRollback, AfterMigration                         mgr.Config
+	TrayBefore, TrayAfterRollback, TrayAfterMigration             migrationTrayValue
+	SourceExeSHA256, SourceConfigSHA256                           string
+	DestinationConfigBeforeSHA256, DestinationConfigAfterSHA256   string
+	SCMStartError                                                 string
+	SCMStartErrorCode                                             uint32
+	SourceDPIPID, RestoredDPIPID, TargetDPIPID                    uint32
+	ImportedSettings                                              Config
+	RollbackBackup, CompletedBackup                               lifecycleMigrationBackupReport
+	RollbackVerified, MigrationVerified, CleanupVerified          bool
+	GUI                                                           lifecycleMigrationGUIReport
+	Interruptions                                                 []lifecycleMigrationInterruptionReport
+	CandidateValidationError                                      string
+	CandidateValidationErrorCode                                  uint32
+	SourceRestartValidationPassed, CandidateLockHeldDuringRestart bool
+	DNSRecoveredWithCandidateLocked, CandidateLockReleased        bool
 }
 
 func readLifecycleMigrationFile(t *testing.T, path string) []byte {

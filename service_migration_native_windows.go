@@ -130,23 +130,46 @@ func validateMigrationFiles(p serviceMigrationPlan) error {
 	if err := validatePortableServiceFolder(root); err != nil {
 		return err
 	}
+	if err := validateMigrationSourceFiles(p); err != nil {
+		return err
+	}
+	return validateMigrationFile(root, p.TargetExe, p.TargetExeHash, 128<<20)
+}
+
+func validateMigrationSourceFiles(p serviceMigrationPlan) error {
 	for _, f := range []struct {
 		root, path, hash string
 		limit            int64
 	}{
 		{filepath.Dir(p.SourceExe), p.SourceExe, p.SourceExeHash, 128 << 20},
 		{filepath.Dir(p.SourceExe), p.SourceConfig, p.SourceConfigHash, 4 << 20},
-		{root, p.TargetExe, p.TargetExeHash, 128 << 20},
 	} {
-		data, err := readMigrationFile(f.root, f.path, f.limit)
-		if err != nil {
-			return fmt.Errorf("validate migration file %s: %w", f.path, err)
-		}
-		if migrationHash(data) != f.hash {
-			return fmt.Errorf("migration file changed; review it again: %s", f.path)
+		if err := validateMigrationFile(f.root, f.path, f.hash, f.limit); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateMigrationFile(root, path, expected string, limit int64) error {
+	data, err := readMigrationFile(root, path, limit)
+	if err != nil {
+		return fmt.Errorf("validate migration file %s: %w", path, err)
+	}
+	if migrationHash(data) != expected {
+		return fmt.Errorf("migration file changed; review it again: %s", path)
+	}
+	return nil
+}
+
+// Restart only the reviewed, still-protected source. A failed candidate may
+// remain locked or unavailable throughout rollback; it is not an input to the
+// restored service. The transaction separately rechecks the exact old binding.
+func validateMigrationSourceForRestart(p serviceMigrationPlan) error {
+	if err := validatePortableServiceFolder(filepath.Dir(p.SourceExe)); err != nil {
+		return err
+	}
+	return validateMigrationSourceFiles(p)
 }
 
 func migrateExistingService(p serviceMigrationPlan) (string, error) {
@@ -168,10 +191,7 @@ func nativeMigrationHooks(p serviceMigrationPlan) migrationHooks {
 			return changeMigrationTrayAt(registry.LOCAL_MACHINE, runRegistryKey, p.Tray, p.TargetExe, p.TargetConfig, p.Settings.ServiceAutoStart)
 		},
 		ValidateSource: func() error {
-			if err := validatePortableServiceFolder(filepath.Dir(p.SourceExe)); err != nil {
-				return err
-			}
-			return validateMigrationFiles(p)
+			return validateMigrationSourceForRestart(p)
 		},
 	}
 }

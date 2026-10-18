@@ -63,6 +63,12 @@ process handle. These procedures require a non-skipped pass on the tested commit
 An exclusive lock on the candidate EXE forces a real SCM startup error; the test
 requires the previous binding and running DNS to recover, exact destination
 config bytes and tray value/type to survive, and all source/backup hashes to match.
+The lock remains held through rollback, old-service restart and UDP/TCP DNS
+recovery. Full candidate validation must still fail with sharing violation 32
+while source-only restart validation succeeds. The source tree must remain
+protected and both reviewed source-file hashes must match; a separate protected
+filesystem test rejects changed source bytes and an unsafe source folder.
+The lock is released only after backup and DNS checks, before the next migration.
 The subsequent successful migration is confirmed through the built GUI. Its
 success status must identify the actual backup directory and its controls must
 show the imported custom provider and TCP DPI mode before the usual backend

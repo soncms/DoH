@@ -24,6 +24,9 @@ lifecycle checks do not establish DPI effectiveness or application compatibility
 The harness additionally runs production migration hooks against a running
 service: a real SCM startup failure while the candidate image is exclusively
 locked must roll back and restore DNS, followed by a successful migration.
+That candidate lock stays held until the old service answers UDP/TCP DNS again.
+Rollback restart validates only the protected, hash-pinned source and exact
+restored SCM binding; the unavailable candidate must not block safe recovery.
 It checks settings/SCM/tray snapshots, backup hashes and helper cleanup. The built
 GUI is also operated through its native menu/dialogs: default No, cancellation,
 a real pre-stage config lock failure, then successful migration with imported

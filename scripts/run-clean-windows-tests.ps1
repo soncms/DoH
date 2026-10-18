@@ -84,6 +84,7 @@ try {
     'embedded DPI helper restarted after forced exit', 'embedded DPI helper stopped without orphan',
     'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors',
     'live migration rollback after real SCM startup failure',
+    'live migration rollback kept candidate image locked through old-service DNS recovery',
     'live migration completed: custom config, SCM fields, tray, backup hashes and DNS verified',
     'live migration cleanup verified: service, driver, tray and both helper paths absent',
     'live GUI migration cancellation: default No, exact state and DNS unchanged',
@@ -129,6 +130,9 @@ try {
   if (-not (Test-Path -LiteralPath $env:SONDNS_SERVICE_TEST_LOG -PathType Leaf)) { throw 'Service runtime log is missing' }
   if ($migration.RollbackVerified -ne $true -or $migration.MigrationVerified -ne $true -or
       $migration.CleanupVerified -ne $true -or $migration.SCMStartErrorCode -le 0 -or
+      $migration.CandidateValidationErrorCode -ne 32 -or -not $migration.CandidateValidationError -or
+      $migration.SourceRestartValidationPassed -ne $true -or $migration.CandidateLockHeldDuringRestart -ne $true -or
+      $migration.DNSRecoveredWithCandidateLocked -ne $true -or $migration.CandidateLockReleased -ne $true -or
       $migration.RollbackBackup.Status -cne 'rolled-back' -or $migration.CompletedBackup.Status -cne 'complete' -or
       $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1 -or
       $migration.GUI.CancelledUnchanged -ne $true -or $migration.GUI.ValidationFailureUnchanged -ne $true -or
