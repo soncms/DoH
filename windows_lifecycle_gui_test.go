@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,6 +185,12 @@ func (g *lifecycleGUI) wait(label string, ready func() bool) {
 	for _, h := range lifecycleGUIWindows(0) {
 		if g.owns(h) {
 			observed = append(observed, lifecycleGUIClass(h)+": "+g.text(h))
+			for _, child := range lifecycleGUIWindows(h) {
+				if g.owns(child) {
+					observed = append(observed, fmt.Sprintf("  %s id=%d enabled=%t: %s", lifecycleGUIClass(child),
+						win.GetWindowLong(child, win.GWL_ID), win.IsWindowEnabled(child), g.text(child)))
+				}
+			}
 		}
 	}
 	g.t.Fatalf("waiting for GUI %s; owned windows: %v", label, observed)
@@ -266,11 +273,14 @@ func (g *lifecycleGUI) confirmation(p serviceMigrationPlan) win.HWND {
 
 func (g *lifecycleGUI) click(dialog win.HWND, id int32) {
 	g.t.Helper()
-	button := win.GetDlgItem(dialog, id)
-	if !g.owns(button) || !win.IsWindowEnabled(button) {
-		g.t.Fatal("dialog button unavailable")
-	}
 	title := g.text(dialog)
+	var button win.HWND
+	// A message box becomes enumerable before Windows finishes initializing all
+	// its buttons. Readiness is not implied by the title/static text being set.
+	g.wait(fmt.Sprintf("enabled dialog button %d in %s", id, title), func() bool {
+		button = win.GetDlgItem(dialog, id)
+		return g.owns(button) && win.IsWindowEnabled(button)
+	})
 	g.post(button, win.BM_CLICK, 0, 0)
 	g.wait("dialog dismissed", func() bool { return !g.owns(dialog) || g.text(dialog) != title })
 }
