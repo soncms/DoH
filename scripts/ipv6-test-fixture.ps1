@@ -50,7 +50,9 @@ function Assert-FixtureIdentity {
   if ($adapter.InterfaceGuid.ToString() -cne $script:state.interfaceGuid) { throw 'IPv6 fixture adapter identity changed' }
 }
 function Assert-InterfaceUnchanged {
-  $current = Get-FixtureInterface | ConvertTo-Json -Compress
+  $script:state.interfaceAfter = Get-FixtureInterface
+  Save-Fixture
+  $current = $script:state.interfaceAfter | ConvertTo-Json -Compress
   if ($current -cne ($script:state.interfaceBefore | ConvertTo-Json -Compress)) {
     throw 'IPv6 interface policy changed; retain evidence and discard/restore the disposable VM'
   }
@@ -82,14 +84,20 @@ function Remove-Fixture {
   }
   if ($script:state.ownsSource) {
     foreach ($address in @(Get-FixtureAddresses)) {
-      if ($address.PrefixLength -ne 128 -or -not $address.SkipAsSource) { throw 'IPv6 source changed concurrently; cleanup preserved it' }
+      if ($address.PrefixLength -ne 128 -or -not $address.SkipAsSource) { throw 'IPv6 source does not match the owned /128 SkipAsSource entry; cleanup preserved it' }
       $address | Remove-NetIPAddress -Confirm:$false
     }
     $script:state.ownsSource = $false
     Save-Fixture
   }
-  if (@(Get-FixtureAddresses).Count -or @(Get-FixtureRoutes).Count -or @(Get-FixtureSourceRoutes).Count -or
-      @(Get-FixtureNeighbors $script:state.destination).Count -or @(Get-FixtureNeighbors $script:state.linkLocalDestination).Count) {
+  $script:state.resourcesAfterRemoval = [ordered]@{
+    sourceAddresses=@(Get-FixtureAddresses).Count; destinationRoutes=@(Get-FixtureRoutes).Count
+    sourceRoutes=@(Get-FixtureSourceRoutes).Count
+    destinationNeighbors=@(Get-FixtureNeighbors $script:state.destination).Count
+    linkLocalNeighbors=@(Get-FixtureNeighbors $script:state.linkLocalDestination).Count
+  }
+  Save-Fixture
+  if (@($script:state.resourcesAfterRemoval.Values | Where-Object { $_ -ne 0 }).Count) {
     throw 'Synthetic IPv6 resources remain; discard/restore the disposable VM'
   }
   Assert-InterfaceUnchanged
@@ -127,7 +135,8 @@ $script:state = [ordered]@{
   destination=([Net.IPAddress]::Parse("2001:db8:5344:${segment}::53").ToString())
   linkLocalSource=$selected.address; linkLocalDestination=([Net.IPAddress]::Parse("fe80::5344:${segment}:53").ToString())
   neighborMAC=('02-53-' + ($owner.Substring(4,8) -replace '(..)(..)(..)(..)','$1-$2-$3-$4'))
-  interfaceBefore=$null; ownsSource=$false; ownsRoute=$false
+  interfaceBefore=$null; interfaceAfter=$null; sourceObserved=$null; resourcesAfterRemoval=$null
+  ownsSource=$false; ownsRoute=$false
   ownsDestinationNeighbor=$false; ownsLinkLocalNeighbor=$false
   setupComplete=$false; cleanupVerified=$false; error=''
 }
@@ -143,7 +152,7 @@ Save-Fixture
 try {
   # netsh adds one active-store IPv6 unicast address without disabling DHCP or
   # router discovery. SkipAsSource prevents selection for unrelated VM traffic.
-  $output = & "$env:SystemRoot/System32/netsh.exe" interface ipv6 add address "interface=$($script:state.interfaceIndex)" "address=$($script:state.source)" type=unicast store=active skipassource=true 2>&1
+  $output = & "$env:SystemRoot/System32/netsh.exe" interface ipv6 add address "interface=$($script:state.interfaceIndex)" "address=$($script:state.source)/128" type=unicast store=active skipassource=true 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Add synthetic IPv6 source failed: $output" }
   $script:state.ownsSource = $true
   Save-Fixture
@@ -160,11 +169,13 @@ try {
   }
   $deadline = [DateTime]::UtcNow.AddSeconds(10)
   do {
-    $source = @(Get-FixtureAddresses | Where-Object { $_.AddressState -eq 'Preferred' -and $_.PrefixLength -eq 128 -and $_.SkipAsSource })
+    $script:state.sourceObserved = @(Get-FixtureAddresses | Select-Object IPAddress,AddressState,PrefixLength,SkipAsSource)
+    $source = @($script:state.sourceObserved | Where-Object { $_.AddressState -eq 'Preferred' -and $_.PrefixLength -eq 128 -and $_.SkipAsSource })
     if ($source.Count -eq 1) { break }
     Start-Sleep -Milliseconds 200
   } while ([DateTime]::UtcNow -lt $deadline)
-  if ($source.Count -ne 1) { throw 'Synthetic IPv6 source did not become preferred' }
+  Save-Fixture
+  if ($source.Count -ne 1) { throw 'Synthetic IPv6 source did not become a preferred /128 SkipAsSource address' }
   Assert-InterfaceUnchanged
   $script:state.setupComplete = $true
   Save-Fixture

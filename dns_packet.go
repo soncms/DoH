@@ -47,7 +47,14 @@ func parseDNSDatagram(raw []byte) (dnsDatagram, error) {
 			ext := raw[p.udpOffset:]
 			length := 0
 			switch next {
-			case 0, 43, 60: // hop-by-hop, routing, destination options
+			case 0, 60: // hop-by-hop, destination options
+				length = (int(ext[1]) + 1) * 8
+			case 43:
+				// RFC 8200 section 4.4: until all routing segments have been
+				// processed, the base destination is not the logical endpoint.
+				if ext[3] != 0 {
+					return p, errors.New("active IPv6 routing header requires bypass")
+				}
 				length = (int(ext[1]) + 1) * 8
 			case 44: // permit an atomic fragment, but not a fragmented datagram
 				if binary.BigEndian.Uint16(ext[2:4])&0xfff9 != 0 {
@@ -55,7 +62,9 @@ func parseDNSDatagram(raw []byte) (dnsDatagram, error) {
 				}
 				length = 8
 			case 51: // authentication header
-				length = (int(ext[1]) + 2) * 4
+				// RFC 4302 section 3.3.3: changing addresses or DNS data would
+				// invalidate the ICV. Preserve the original IPsec packet instead.
+				return p, errors.New("IPv6 authentication header requires bypass")
 			default:
 				return p, fmt.Errorf("unsupported IPv6 next header %d", next)
 			}

@@ -54,6 +54,8 @@ failure. See the portable guide before switching an existing installation.
 - IPv4/IPv6 outbound UDP/53 interception through WinDivert, requiring admin
   access. It does not intercept TCP/53, applications' own DoH/DoT, mDNS/LLMNR
   or DNS inside a VPN tunnel.
+  Fragments, IPv6 authentication headers and active routing headers pass through
+  unchanged; SonDNS does not terminate IPsec or IPv6 source routing.
 - Native request table with results, latency, copy/clear actions and at most
   200 recent requests in memory. SonDNS has no local DNS cache.
 - Optional embedded zapret2/winws2 DPI profiles. DNS interception stays active

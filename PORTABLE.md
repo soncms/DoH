@@ -37,6 +37,12 @@ Custom upstreams in an existing local config are preserved when changing DPI
 or installing the service. They appear as **Custom (saved configuration)** in
 the DNS menu; selecting a preset explicitly replaces them.
 
+Interception covers outbound IPv4/IPv6 UDP/53. Fragments, authenticated IPv6
+packets and active routing headers retain their original network handling;
+SonDNS cannot create IPsec authentication or reverse a source route. Unsupported
+captured packets are reinjected unchanged and recorded as **BYPASS**, preserving
+the original resolver/network policy instead of synthesizing an invalid reply.
+
 Opening the window does not install, start or replace a service. A normal
 window is read-only: use **Manage…** to reopen it through Windows UAC before
 changing DNS/DPI, clearing the service log or managing the service. Cancelling

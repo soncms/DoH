@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -47,6 +49,49 @@ func TestDNSDatagramIPv4Reply(t *testing.T) {
 	}
 }
 
+func TestDNSDatagramIPv6ProtectedHeadersBypass(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("sondns-test.invalid.", dns.TypeAAAA)
+	wire, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, reason string
+		next         byte
+		extension    []byte
+	}{
+		// RFC 4302: ICV binds the original packet and cannot authenticate a
+		// synthetic DNS response with changed addresses, UDP header and data.
+		{"authentication", "authentication", 51, []byte{17, 4, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}},
+		// An active type-2 routing header's base destination is a care-of
+		// address, not the logical DNS endpoint in the routing header.
+		{"active-routing", "routing", 43, append([]byte{17, 2, 2, 1, 0, 0, 0, 0}, net.ParseIP("2001:db8::53").To16()...)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := make([]byte, 40+len(test.extension)+8+len(wire))
+			raw[0], raw[6], raw[7] = 0x60, test.next, 64
+			binary.BigEndian.PutUint16(raw[4:6], uint16(len(raw)-40))
+			copy(raw[8:24], net.ParseIP("2001:db8::20").To16())
+			copy(raw[24:40], net.ParseIP("2001:db8::1").To16())
+			copy(raw[40:], test.extension)
+			offset := 40 + len(test.extension)
+			binary.BigEndian.PutUint16(raw[offset:offset+2], 5353)
+			binary.BigEndian.PutUint16(raw[offset+2:offset+4], 53)
+			binary.BigEndian.PutUint16(raw[offset+4:offset+6], uint16(8+len(wire)))
+			copy(raw[offset+8:], wire)
+			original := append([]byte(nil), raw...)
+			packet, err := parseDNSDatagram(raw)
+			if err == nil || !strings.Contains(err.Error(), test.reason) {
+				t.Fatalf("protected IPv6 packet must bypass interception: %v", err)
+			}
+			if !bytes.Equal(packet.raw, original) {
+				t.Fatal("bypass must retain the complete original packet for reinjection")
+			}
+		})
+	}
+}
+
 func TestDNSDatagramIPv6Reply(t *testing.T) {
 	query := new(dns.Msg)
 	query.SetQuestion("example.com.", dns.TypeAAAA)
@@ -77,5 +122,55 @@ func TestDNSDatagramIPv6Reply(t *testing.T) {
 	}
 	if got := net.IP(response[24:40]).String(); got != "2001:db8::20" {
 		t.Fatalf("response destination = %s", got)
+	}
+}
+
+func TestDNSDatagramIPv6CompletedRoutingReply(t *testing.T) {
+	query := new(dns.Msg)
+	query.SetQuestion("sondns-test.invalid.", dns.TypeAAAA)
+	wire, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Type 2, Segments Left=0: the base destination is the final endpoint.
+	route := append([]byte{17, 2, 2, 0, 0, 0, 0, 0}, net.ParseIP("2001:db8::1").To16()...)
+	offset := 40 + len(route)
+	raw := make([]byte, offset+8+len(wire))
+	raw[0], raw[6], raw[7] = 0x60, 43, 64
+	binary.BigEndian.PutUint16(raw[4:6], uint16(len(raw)-40))
+	copy(raw[8:24], net.ParseIP("2001:db8::20").To16())
+	copy(raw[24:40], net.ParseIP("2001:db8::1").To16())
+	copy(raw[40:], route)
+	binary.BigEndian.PutUint16(raw[offset:offset+2], 5353)
+	binary.BigEndian.PutUint16(raw[offset+2:offset+4], 53)
+	binary.BigEndian.PutUint16(raw[offset+4:offset+6], uint16(8+len(wire)))
+	copy(raw[offset+8:], wire)
+	packet, err := parseDNSDatagram(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := new(dns.Msg)
+	answer.SetReply(query)
+	answer.Answer = []dns.RR{&dns.AAAA{
+		Hdr:  dns.RR_Header{Name: query.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+		AAAA: net.ParseIP("2001:db8::42"),
+	}}
+	responseWire, err := answer.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := packet.reply(responseWire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(response[40:offset], route) || response[6] != 43 ||
+		!net.IP(response[8:24]).Equal(net.ParseIP("2001:db8::1")) ||
+		!net.IP(response[24:40]).Equal(net.ParseIP("2001:db8::20")) ||
+		binary.BigEndian.Uint16(response[4:6]) != uint16(len(response)-40) ||
+		binary.BigEndian.Uint16(response[offset:offset+2]) != 53 ||
+		binary.BigEndian.Uint16(response[offset+2:offset+4]) != 5353 ||
+		binary.BigEndian.Uint16(response[offset+4:offset+6]) != uint16(8+len(responseWire)) ||
+		!bytes.Equal(response[offset+8:], responseWire) {
+		t.Fatal("completed IPv6 routing header did not retain a valid DNS reply envelope")
 	}
 }
