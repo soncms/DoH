@@ -8,6 +8,14 @@ on:
         required: true
         type: boolean
         default: false
+      artifact_version:
+        description: 'Optional exact preview version to rebuild; must accompany expected_exe_sha256'
+        required: false
+        type: string
+      expected_exe_sha256:
+        description: 'Optional SHA-256 of the reviewed EXE; mismatch stops before any lifecycle test'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -60,11 +68,15 @@ jobs:
         id: build
         env:
           SONDNS_FILESYSTEM_TEST_PARENT: 'C:\'
+          SONDNS_ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          SONDNS_EXPECTED_EXE_SHA256: ${{ inputs.expected_exe_sha256 }}
         run: |
           $ErrorActionPreference = 'Stop'
           $reports = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-reports'
           $work = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-build'
-          $version = "ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$($env:GITHUB_SHA.Substring(0,12))"
+          . ./scripts/hosted-lifecycle-artifact.ps1
+          $identity = Resolve-HostedLifecycleArtifact -RequestedVersion $env:SONDNS_ARTIFACT_VERSION -ExpectedSHA256 $env:SONDNS_EXPECTED_EXE_SHA256 -DefaultVersion "ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$($env:GITHUB_SHA.Substring(0,12))"
+          $version = $identity.Version
           # Finish dependency/native-source downloads before DNS interception.
           ./scripts/package-source.ps1 -Version $version -OutputDirectory "$work/source"
           $source = Join-Path $work 'Source with spaces'
@@ -84,6 +96,9 @@ jobs:
           $env:GOCACHE = Join-Path $work 'empty-buildcache'
           & "$source/scripts/build.ps1" -Version $version -OutputDirectory "$work/portable"
           Copy-Item -LiteralPath "$work/portable/build-info.json" -Destination $reports
+          # Compare actual file bytes and clean source metadata before building
+          # the kit or allowing the next step to install a service/driver.
+          Assert-HostedLifecycleArtifact -ApplicationDirectory "$work/portable" -SourceManifest "$source/source-package.json" -SourceCommit $env:GITHUB_SHA -Version $version -ExpectedSHA256 $identity.ExpectedSHA256 -ReportPath "$reports/artifact-expectation.json"
           & "$source/scripts/package-windows-test-kit.ps1" -ApplicationDirectory "$work/portable" -OutputDirectory "$work/kits"
           & "$source/scripts/verify-source.ps1" -Root $source -AllowBuildOutputs
           if (@(Get-ChildItem -LiteralPath $env:GOMODCACHE -File -Recurse -ErrorAction SilentlyContinue).Count) {
@@ -123,9 +138,14 @@ jobs:
             $passed = $result.testStarted -eq $true -and $result.lifecyclePassed -eq $true -and
               $result.fullReleaseValidationPassed -eq $false
           }
+          $identity = $null
+          $identityPath = Join-Path $reports 'artifact-expectation.json'
+          if (Test-Path -LiteralPath $identityPath) { $identity = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json }
+          if ($passed -and ($null -eq $identity -or -not $identity.passed)) { throw 'Lifecycle PASS without validated artifact identity' }
           [ordered]@{
             buildOutcome = $env:SONDNS_BUILD_OUTCOME; testOutcome = $env:SONDNS_TEST_OUTCOME
             lifecyclePassed = $passed; fullReleaseValidationPassed = $false
+            artifactIdentity = $identity
             stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'other migration failure stages beyond pre-stage validation and locked-image SCM start',
               'power-loss and manual recovery',
               'DPI effectiveness and application compatibility', 'publisher signing', 'maintainer release review')

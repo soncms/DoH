@@ -175,6 +175,22 @@ requires elevation, refuses existing SonDNS/WinDivert installations and treats
 a skipped test as failure. Build failure, skipped execution or a missing result
 does not establish a lifecycle pass.
 
+To compare a previously reviewed unsigned preview, provide both `artifact_version`
+and `expected_exe_sha256` when dispatching. The version must be 1–80 letters,
+digits, dots, underscores or hyphens and start with a letter/digit; the hash must
+be exactly 64 hexadecimal characters. Inputs enter PowerShell through environment
+variables and are validated before packaging. Leave both empty for the normal
+unique CI version. The workflow always rebuilds the selected clean commit.
+
+Before kit construction or live lifecycle execution, the job checks actual EXE
+bytes, version, source commit/clean state and source-manifest hash against build
+metadata. `artifact-expectation.json` records the observed/expected hash and whether
+an exact comparison was requested. A mismatch fails the build step and retains
+the report; it never substitutes the rebuilt hash for the reviewed hash. A
+successful default run does not claim it tested a previous preview. Exact hash
+matching is not promised across toolchains, source changes or publisher signing;
+signed release artifacts require their own final-artifact validation.
+
 GitHub destroys the hosted VM at the end of the job; this is the isolation and
 recovery assumption instead of a local restore snapshot. Do not change this
 workflow to a self-hosted runner or run its lifecycle commands on a working PC.
