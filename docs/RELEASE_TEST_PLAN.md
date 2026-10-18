@@ -3,10 +3,23 @@
 Use a clean disposable Windows amd64 VM with a snapshot. Record the Windows
 build, SonDNS version/EXE SHA-256, source ZIP/manifest hashes and signing status.
 Create a standard user and a separate administrator. Keep test DNS traffic
-synthetic. None of these results has been recorded for a clean machine yet.
+synthetic. A basic lifecycle pass was recorded on a disposable GitHub-hosted
+Windows Server 2022 amd64 VM at commit `2ba849dec732`:
+[run 39116932464](https://github.com/soncms/DoH/actions/runs/39116932464).
+It covered service/driver installation and cleanup, local UDP/TCP DNS, transparent
+IPv4 UDP/53, custom config/tray bindings and read-only GUI startup. It did not
+cover every manual case below. A result applies only to its recorded EXE hash
+and source commit; use the report for each subsequent run.
 The optional [prebuilt test kit](CLEAN_WINDOWS_TESTS.md) prepares a deterministic
 basic lifecycle run without Go or public resolvers; it does not replace the
 manual cases below or establish a pass before being run in that VM.
+
+The current harness also includes a query held at its encrypted upstream during
+service stop, a quiet interval without harness DNS traffic, native shutdown-log
+checks, and embedded DPI process startup/forced exit/restart/shutdown. These are
+test procedures until a non-skipped pass is recorded for the changed commit.
+The quiet interval does not exclude Windows background traffic. Process
+lifecycle checks do not establish DPI effectiveness or application compatibility.
 
 ## Single EXE and elevation
 

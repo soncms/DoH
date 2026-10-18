@@ -58,10 +58,11 @@ if ($reasons.Count) { throw ($reasons -join '; ') }
 $savedEnv = @{}
 $failure = $null
 try {
-  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT','SONDNS_SERVICE_TEST_LOG')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
   $env:SONDNS_SERVICE_TEST = '1'
   $env:SONDNS_TEST_EXE = Join-Path $KitDirectory 'SonDNS.exe'
   $env:SONDNS_SERVICE_TEST_PARENT = "$env:SystemDrive\"
+  $env:SONDNS_SERVICE_TEST_LOG = Join-Path $reportRoot 'service-runtime.log'
   $report.testStarted = $true
   Save-Report
   $stdout = Join-Path $reportRoot 'service-test.log'
@@ -74,6 +75,14 @@ try {
   if ($process.ExitCode -ne 0 -or $log -notmatch '(?m)^--- PASS: TestWindowsServiceLifecycle ' -or $log -match '(?m)^--- SKIP: TestWindowsServiceLifecycle ') {
     throw "Lifecycle test did not pass. Read $stdout and $stderr"
   }
+  $checks = @('in-flight intercepted query held upstream during stop',
+    'embedded DPI helper restarted after forced exit', 'embedded DPI helper stopped without orphan',
+    'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors')
+  foreach ($check in $checks) {
+    if (-not $log.Contains($check)) { throw "Lifecycle evidence is missing: $check" }
+  }
+  if (-not (Test-Path -LiteralPath $env:SONDNS_SERVICE_TEST_LOG -PathType Leaf)) { throw 'Service runtime log is missing' }
+  $report['checksPassed'] = $checks
   $report.lifecyclePassed = $true
 } catch {
   $failure = $_

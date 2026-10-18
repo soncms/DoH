@@ -34,8 +34,13 @@ The lifecycle test creates a protected unique folder under the system drive,
 installs/starts/stops/restarts/uninstalls the real service and driver, checks
 custom config/Run bindings, launches the GUI without changes, tests local UDP
 and TCP DNS, and checks transparent IPv4 UDP/53 interception. It uses saved
-manual/automatic startup modes without rebooting. It removes its fixture when
-cleanup succeeds, and retains it when recovery is needed. Logs and JSON results
+manual/automatic startup modes without rebooting. It holds an intercepted query
+at the encrypted upstream while stopping, checks bounded shutdown and native
+error logs, and exercises the embedded DPI process startup, forced exit,
+automatic restart and shutdown. Process termination is restricted to a handle
+whose image path matches the unique fixture. A quiet stop includes 500 ms without
+harness DNS queries; Windows background DNS is not suppressed. It removes its
+fixture when cleanup succeeds, and retains it when recovery is needed. Logs and JSON results
 are saved in `reports/` under the kit folder. A skipped lifecycle test is a
 failure of the runner, never a claimed pass.
 
@@ -48,7 +53,7 @@ alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
 ## Still manual
 
 This does not establish alternate-account UAC, reboot/tray startup, live
-migration/rollback, DPI helper lifecycle, transparent IPv6 interception,
+migration/rollback, DPI effectiveness/application compatibility, transparent IPv6 interception,
 power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in
 the kit and RELEASING.md in the source package before release.
 

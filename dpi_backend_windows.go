@@ -97,12 +97,22 @@ func (b *DPIBackend) run(exe string, args []string) {
 		cmd.Env = b.env
 		cmd.Stdout = logWriter{logger: b.logger, prefix: "dpi: "}
 		cmd.Stderr = logWriter{logger: b.logger, prefix: "dpi: "}
-		b.mu.Lock()
-		b.cmd = cmd
-		b.mu.Unlock()
-
 		b.logger.Printf("starting DPI backend %q", exe)
+		// Publish only a fully started process. Shutdown must not observe a
+		// Cmd with a nil Process and miss a helper that starts immediately
+		// afterward. The same lock makes a concurrent stop wait for Start.
+		b.mu.Lock()
+		select {
+		case <-b.stop:
+			b.mu.Unlock()
+			return
+		default:
+		}
 		err := cmd.Start()
+		if err == nil {
+			b.cmd = cmd
+		}
+		b.mu.Unlock()
 		if err == nil {
 			closeJob, jobErr := attachHelperJob(cmd)
 			if jobErr != nil {

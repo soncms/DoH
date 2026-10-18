@@ -127,7 +127,7 @@ jobs:
             buildOutcome = $env:SONDNS_BUILD_OUTCOME; testOutcome = $env:SONDNS_TEST_OUTCOME
             lifecyclePassed = $passed; fullReleaseValidationPassed = $false
             stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'live migration and rollback',
-              'DPI helper lifecycle', 'transparent IPv6 interception', 'publisher signing', 'maintainer release review')
+              'DPI effectiveness and application compatibility', 'transparent IPv6 interception', 'publisher signing', 'maintainer release review')
           } | ConvertTo-Json | Set-Content -LiteralPath "$reports/workflow-result.json" -Encoding utf8
           @("Lifecycle pass observed: $passed", "", "Full release validation: false. Review the report and remaining manual cases.") |
             Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

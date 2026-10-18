@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,7 +64,22 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 		t.Fatal("build SonDNS.exe before this test")
 	}
 	config := DefaultConfig()
-	stamp, fixtureCalls := startLocalEncryptedDNSFixture(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	releaseHeld := sync.OnceFunc(func() { close(release) })
+	var heldOnce sync.Once
+	stamp, fixtureCalls := startLocalEncryptedDNSFixtureWithGate(t, func(ctx context.Context, q *dns.Msg) error {
+		if len(q.Question) != 1 || q.Question[0].Name != "sondns-hold.invalid." {
+			return nil
+		}
+		heldOnce.Do(func() { close(held) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	t.Cleanup(releaseHeld)
 	config.Upstreams = []Upstream{{URL: stamp}}
 	config.Interception = "windivert"
 	config.LogFile = filepath.Join("data", "system.log")
@@ -107,6 +123,18 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 		if insideRoot(parent, dir) && strings.HasPrefix(filepath.Base(dir), "SonDNS-service-test-") {
 			if err := os.RemoveAll(dir); err != nil {
 				t.Errorf("fixture cleanup: %v", err)
+			}
+		}
+	})
+	logPath := filepath.Join(dir, "data", "system.log")
+	t.Cleanup(func() {
+		if destination := os.Getenv("SONDNS_SERVICE_TEST_LOG"); destination != "" {
+			contents, err := os.ReadFile(logPath)
+			if err == nil {
+				err = os.WriteFile(destination, contents, 0o600)
+			}
+			if err != nil {
+				t.Errorf("save service runtime log: %v", err)
 			}
 		}
 	})
@@ -180,6 +208,7 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	defer cleanup()
 	for _, auto := range []bool{false, true} {
 		config.ServiceAutoStart = auto
+		config.DPI.Enabled = auto
 		if err = SaveConfig(path, config); err != nil {
 			t.Fatal(err)
 		}
@@ -222,6 +251,18 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 			}
 		}()
 		checkGUIReadOnly(true)
+		helperPath := filepath.Join(embeddedRuntimePath(dir), "winws2.exe")
+		var dpiProcess *lifecycleDPIProcess
+		if auto {
+			dpiProcess = waitForLifecycleDPI(t, helperPath, 0)
+			oldPID := dpiProcess.pid
+			if err := windows.TerminateProcess(dpiProcess.handle, 1); err != nil {
+				t.Fatal(err)
+			}
+			requireLifecycleDPIExited(t, dpiProcess)
+			dpiProcess = waitForLifecycleDPI(t, helperPath, oldPID)
+			t.Logf("embedded DPI helper restarted after forced exit: %d -> %d", oldPID, dpiProcess.pid)
+		}
 		if !auto {
 			// A real local UDP and TCP query exercises the service and RAM log IPC.
 			for _, network := range []string{"udp", "tcp"} {
@@ -305,10 +346,48 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 				if err = updateServiceStartup(scmStartupController{s}, true); err != nil {
 					t.Fatal(err)
 				}
+				// The upstream gate proves a synthetic packet is in flight in the
+				// real interceptor. Keep its reply held until SCM reports Stopped.
+				queryCtx, cancelQuery := context.WithCancel(context.Background())
+				defer cancelQuery()
+				defer releaseHeld()
+				queryDone := make(chan error, 1)
+				go func() {
+					q := new(dns.Msg)
+					q.SetQuestion("sondns-hold.invalid.", dns.TypeA)
+					_, _, err := (&dns.Client{Net: "udp", Timeout: 10 * time.Second}).ExchangeContext(queryCtx, q, "203.0.113.53:53")
+					queryDone <- err
+				}()
+				select {
+				case <-held:
+				case <-time.After(5 * time.Second):
+					t.Fatal("intercepted query did not reach the upstream gate")
+				}
+				select {
+				case err := <-queryDone:
+					t.Fatalf("held query completed before service stop: %v", err)
+				default:
+				}
+				stopping := time.Now()
 				if _, err = s.Control(svc.Stop); err != nil {
 					t.Fatal(err)
 				}
 				wait(svc.Stopped)
+				if elapsed := time.Since(stopping); elapsed > 5*time.Second {
+					t.Fatalf("in-flight stop exceeded bound: %s", elapsed)
+				} else {
+					t.Logf("in-flight intercepted query held upstream during stop: %s", elapsed)
+				}
+				cancelQuery()
+				releaseHeld()
+				select {
+				case err := <-queryDone:
+					if err == nil {
+						t.Fatal("held upstream query unexpectedly received a DNS reply")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("synthetic client did not finish after cancellation")
+				}
 				if err = s.Start(); err != nil {
 					t.Fatal(err)
 				}
@@ -322,7 +401,23 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 				}
 			}()
 		}
+		if auto {
+			// No harness DNS queries in this interval. Windows background DNS
+			// is not suppressed, so this is not proof of globally idle traffic.
+			time.Sleep(500 * time.Millisecond)
+		}
+		stopping := time.Now()
 		command("uninstall")
+		if auto {
+			if elapsed := time.Since(stopping); elapsed > 5*time.Second {
+				t.Fatalf("quiet stop exceeded bound: %s", elapsed)
+			} else {
+				t.Logf("quiet stop completed (OS background traffic not excluded): %s", elapsed)
+			}
+			requireLifecycleDPIExited(t, dpiProcess)
+			requireNoLifecycleDPI(t, helperPath)
+			t.Log("embedded DPI helper stopped without orphan")
+		}
 		snap, err = queryServiceSnapshot()
 		if err != nil || snap.Exists {
 			t.Fatalf("uninstall incomplete: %+v %v", snap, err)
@@ -333,4 +428,19 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	if err != nil || !json.Valid(bytes) {
 		t.Fatal("config damaged")
 	}
+	runtimeLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, issue := range []string{
+		"WinDivert shutdown failed", "cancel WinDivert I/O", "close WinDivert handle",
+		"WinDivert shutdown wait timed out", "WinDivert cleanup incomplete",
+		"timed out waiting for DPI backend", "stop DPI backend:",
+		"DPI backend unavailable", "DPI portable directories unavailable",
+	} {
+		if strings.Contains(string(runtimeLog), issue) {
+			t.Fatalf("runtime log contains %q:\n%s", issue, runtimeLog)
+		}
+	}
+	t.Log("runtime log: no shutdown/close/cleanup errors")
 }
