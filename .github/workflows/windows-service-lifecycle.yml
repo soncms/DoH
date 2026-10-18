@@ -99,6 +99,7 @@ jobs:
           # Compare actual file bytes and clean source metadata before building
           # the kit or allowing the next step to install a service/driver.
           Assert-HostedLifecycleArtifact -ApplicationDirectory "$work/portable" -SourceManifest "$source/source-package.json" -SourceCommit $env:GITHUB_SHA -Version $version -ExpectedSHA256 $identity.ExpectedSHA256 -ReportPath "$reports/artifact-expectation.json"
+          Get-Content -LiteralPath "$reports/artifact-expectation.json"
           & "$source/scripts/package-windows-test-kit.ps1" -ApplicationDirectory "$work/portable" -OutputDirectory "$work/kits"
           & "$source/scripts/verify-source.ps1" -Root $source -AllowBuildOutputs
           if (@(Get-ChildItem -LiteralPath $env:GOMODCACHE -File -Recurse -ErrorAction SilentlyContinue).Count) {
@@ -120,6 +121,19 @@ jobs:
             $kitReports = Join-Path $env:SONDNS_CI_KIT 'reports'
             if (Test-Path -LiteralPath $kitReports) {
               Copy-Item -LiteralPath $kitReports -Destination "$env:RUNNER_TEMP/sondns-lifecycle-reports/lifecycle" -Recurse
+              # Preserve bounded test diagnostics in the job log even if DNS
+              # failure prevents the later artifact upload. Never dump runtime
+              # query logs, environment variables or the test-kit directory.
+              $commandToken = [Guid]::NewGuid().ToString('N')
+              Write-Output "::stop-commands::$commandToken"
+              try {
+                foreach ($name in @('result.json','service-test.log','service-test.err')) {
+                  foreach ($file in @(Get-ChildItem -LiteralPath $kitReports -Filter $name -Recurse -File)) {
+                    Write-Output "Lifecycle diagnostic: $name (last 160 lines)"
+                    Get-Content -LiteralPath $file.FullName -Tail 160
+                  }
+                }
+              } finally { Write-Output "::$commandToken::" }
             }
           }
       - name: Record the actual result and remaining validation

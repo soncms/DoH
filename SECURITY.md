@@ -6,10 +6,10 @@ or fix-time service level is promised.
 
 ## Report privately
 
-The intended public-project channel is GitHub Private Vulnerability Reporting:
+Use GitHub Private Vulnerability Reporting:
 [report a vulnerability](https://github.com/soncms/DoH/security/advisories/new).
-That feature must be enabled and checked before publication; it is not currently
-an established channel for this private preview. Do not post exploit details,
+Private reporting is enabled for this public repository. Sign in to GitHub to
+open a private report. Do not post exploit details,
 credentials or sensitive logs in public issues. If the reporting button is
 unavailable, contact the maintainer privately through a previously established
 channel before sending sensitive details.
