@@ -105,7 +105,7 @@ Thông báo giấy phép và nguồn của các thành phần tích hợp nằm 
 ## Kiểm thử Windows
 
 ```powershell
-$env:SONDNS_UI_TEST = '1'; go test -run TestNativeLayout -count=1 -v; Remove-Item Env:SONDNS_UI_TEST
+$env:SONDNS_UI_TEST = '1'; go test -run TestNativeLayout -count=1 -v ./internal/gui; Remove-Item Env:SONDNS_UI_TEST
 ```
 
 Kiểm thử lifecycle cài service/driver thật và tạo hai tài khoản Windows tạm.

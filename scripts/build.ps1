@@ -67,10 +67,10 @@ try {
 
   # Keep normal Go metadata in release builds. Stripping it makes unsigned
   # Windows binaries harder for reputation systems to identify as software.
-  $linkFlags = if ($Console) { "-X main.buildVersion=$Version" } else { "-H=windowsgui -X main.buildVersion=$Version" }
+  $linkFlags = if ($Console) { "-X sondns/internal/buildinfo.Version=$Version" } else { "-H=windowsgui -X sondns/internal/buildinfo.Version=$Version" }
   $vcsArgs = @()
   if ((Test-Path -LiteralPath $sourceManifest) -or -not (Test-Path -LiteralPath (Join-Path $workspace '.git'))) { $vcsArgs = @('-buildvcs=false') }
-  go build @tagArgs @vcsArgs -trimpath -ldflags $linkFlags -o $output .
+  go build @tagArgs @vcsArgs -trimpath -ldflags $linkFlags -o $output ./cmd/sondns
   if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
 
   if ($Sign) {

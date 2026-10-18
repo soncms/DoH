@@ -67,6 +67,12 @@ Choose upstreams you trust. SonDNS is not an anonymity service or a VPN.
 
 ## Build and verify
 
+Application code is grouped by responsibility under [`internal/`](internal):
+GUI, Windows service/runtime, DNS engine, IPC, configuration, request logs and
+packet parsing. [`cmd/sondns`](cmd/sondns) contains the executable entry point.
+Tests live beside the feature they verify; shared fixtures are in
+`internal/testutil`. See the [source map](docs/ARCHITECTURE.md).
+
 Use Windows amd64, Go 1.27.2 and PowerShell 7:
 
 ```powershell

@@ -30,7 +30,7 @@ foreach ($name in @('LICENSE','NOTICE','THIRD_PARTY_NOTICES.md')) { Copy-Item -L
 Copy-Item -LiteralPath (Join-Path $Root 'licenses') -Destination $stage -Recurse
 Push-Location $Root
 try {
-  go test -c -buildvcs=false -trimpath -o (Join-Path $stage 'SonDNS.tests.exe') .
+  go test -c -buildvcs=false -trimpath -o (Join-Path $stage 'SonDNS.tests.exe') ./internal/service
   if ($LASTEXITCODE -ne 0) { throw 'Test harness build failed' }
 } finally { Pop-Location }
 $files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object {

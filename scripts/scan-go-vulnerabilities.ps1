@@ -41,11 +41,11 @@ try {
   $metadata | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'metadata.json') -Encoding utf8
   go list -m -json all > (Join-Path $output 'modules.json')
   if ($LASTEXITCODE -ne 0) { throw 'Cannot collect module/replacement provenance' }
-  go list -deps -f '{{.ImportPath}}' ./... > (Join-Path $output 'packages.txt')
+  go list -deps -f '{{.ImportPath}}' ./cmd/sondns > (Join-Path $output 'packages.txt')
   if ($LASTEXITCODE -ne 0) { throw 'Cannot collect the application package graph' }
   # JSON output can exit zero even when findings exist. The independent parser
   # below must pass as well; do not replace it with an exit-code-only check.
-  go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -json -scan=symbol ./... > (Join-Path $output 'govulncheck.json') 2> (Join-Path $output 'scanner.err')
+  go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -json -scan=symbol ./cmd/sondns > (Join-Path $output 'govulncheck.json') 2> (Join-Path $output 'scanner.err')
   $scanExitCode = $LASTEXITCODE
   $metadata['scannerExitCode'] = $scanExitCode
   $metadata['completedUTC'] = [DateTime]::UtcNow.ToString('o')

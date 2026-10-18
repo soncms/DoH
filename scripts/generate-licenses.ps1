@@ -7,7 +7,7 @@ try {
   if (Test-Path -LiteralPath $inventoryPath) {
     $previousInventory = @(Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json)
   }
-  $modules = @(go list -deps -f '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}{{end}}' . | Where-Object { $_ } | Sort-Object -Unique)
+  $modules = @(go list -deps -f '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}{{end}}' ./cmd/sondns | Where-Object { $_ } | Sort-Object -Unique)
   if ($LASTEXITCODE -ne 0) { throw 'Cannot identify linked modules' }
   $rows = @()
   foreach ($line in $modules) {
