@@ -15,6 +15,16 @@ a Go tool in `go.mod`; it is included when vendoring dependencies.
 ./scripts/package-source.ps1 -Version local-review
 ```
 
+The repository includes `native-source-cache/`, containing the four exact pinned
+native source/reference archives. Packaging uses that cache by default, verifies
+the existing hashes and binary/source correspondence, and places the verified
+archives in the source ZIP's `native-sources/` directory without duplicating the
+cache. This avoids relying on the historical Cygwin mirror being reachable from
+a build runner. An explicit `-NativeSourceCacheDirectory` overrides the default.
+`.gitattributes` preserves exact upstream runtime and source-tree metadata bytes
+on Windows checkouts; do not normalize their line endings or change their pins
+to accept a checkout conversion.
+
 This creates `dist/source/SonDNS-source-local-review.zip`, an extracted source
 directory and a checksum. An existing destination is refused. The package
 contains the current application source, the modified Walk source, build

@@ -1,0 +1,5 @@
+# These upstream bytes are verified against fixed SHA-256 pins. Git must not
+# translate their line endings when a Windows checkout enables core.autocrlf.
+/third_party/zapret2/** -text
+/assets/cygwin-3.4.10-git-tree.json -text
+/native-source-cache/** -text

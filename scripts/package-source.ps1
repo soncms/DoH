@@ -8,6 +8,17 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $Root = [IO.Path]::GetFullPath($Root)
+if (-not $NativeSourceCacheDirectory) {
+  # Keep source builds independent of the availability of historical mirrors.
+  # The collector still verifies every cached archive and its source evidence.
+  foreach ($name in @('native-source-cache','native-sources')) {
+    $candidate = Join-Path $Root $name
+    if (Test-Path -LiteralPath $candidate -PathType Container) {
+      $NativeSourceCacheDirectory = $candidate
+      break
+    }
+  }
+}
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $Root 'dist/source' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $stage = Join-Path $OutputDirectory "SonDNS-source-$Version"
@@ -26,7 +37,7 @@ $selected = [Collections.Generic.List[string]]::new()
 foreach ($file in Get-ChildItem -LiteralPath $Root -Filter '*.go' -File) {
   $selected.Add($file.Name)
 }
-foreach ($name in @('go.mod','go.sum','LICENSE','NOTICE','README.md','PORTABLE.md',
+foreach ($name in @('.gitattributes','go.mod','go.sum','LICENSE','NOTICE','README.md','PORTABLE.md',
   'THIRD_PARTY_NOTICES.md','RUNTIME_PROVENANCE.md','RELEASING.md','SECURITY.md',
   'CONTRIBUTING.md','PRIVACY.md','config.example.json')) {
   if (-not (Test-Path -LiteralPath (Join-Path $Root $name) -PathType Leaf)) { throw "Required source is missing: $name" }
