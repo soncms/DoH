@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 $KitDirectory = [IO.Path]::GetFullPath($KitDirectory)
 $manifestPath = Join-Path $KitDirectory 'test-kit.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-foreach ($name in @('SonDNS.exe','SonDNS.tests.exe','run-clean-windows-tests.ps1')) {
+foreach ($name in @('SonDNS.exe','SonDNS.tests.exe','run-clean-windows-tests.ps1','ipv6-test-fixture.ps1')) {
   $file = Join-Path $KitDirectory $name
   $item = Get-Item -LiteralPath $file
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Test kit link rejected: $name" }
@@ -57,12 +57,16 @@ if (-not $DisposableVM) { throw 'Run mode requires -DisposableVM on a clean VM w
 if ($reasons.Count) { throw ($reasons -join '; ') }
 $savedEnv = @{}
 $failure = $null
+$ipv6StatePath = Join-Path $reportRoot 'ipv6-network.json'
 try {
-  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT','SONDNS_SERVICE_TEST_LOG')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT','SONDNS_SERVICE_TEST_LOG','SONDNS_TEST_IPV6_NETWORK')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
   $env:SONDNS_SERVICE_TEST = '1'
   $env:SONDNS_TEST_EXE = Join-Path $KitDirectory 'SonDNS.exe'
   $env:SONDNS_SERVICE_TEST_PARENT = "$env:SystemDrive\"
   $env:SONDNS_SERVICE_TEST_LOG = Join-Path $reportRoot 'service-runtime.log'
+  & (Join-Path $KitDirectory 'ipv6-test-fixture.ps1') -Mode Create -StateFile $ipv6StatePath -DisposableVM
+  $env:SONDNS_TEST_IPV6_NETWORK = Join-Path $reportRoot 'ipv6-network-setup.json'
+  Copy-Item -LiteralPath $ipv6StatePath -Destination $env:SONDNS_TEST_IPV6_NETWORK
   $report.testStarted = $true
   Save-Report
   $stdout = Join-Path $reportRoot 'service-test.log'
@@ -80,7 +84,10 @@ try {
     'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors',
     'live migration rollback after real SCM startup failure',
     'live migration completed: custom config, SCM fields, tray, backup hashes and DNS verified',
-    'live migration cleanup verified: service, driver, tray and both helper paths absent')
+    'live migration cleanup verified: service, driver, tray and both helper paths absent',
+    'IPv6 fixture before service: documentation and scoped link-local A/AAAA timed out',
+    'transparent IPv6 documentation and scoped link-local A/AAAA replies verified',
+    'IPv6 fixture after service: documentation and scoped link-local A/AAAA timed out')
   foreach ($check in $checks) {
     if (-not $log.Contains($check)) { throw "Lifecycle evidence is missing: $check" }
   }
@@ -92,12 +99,30 @@ try {
       $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1) {
     throw 'The live migration/rollback report is incomplete'
   }
+  $ipv6 = Get-Content -LiteralPath (Join-Path $reportRoot 'ipv6-dns.json') -Raw | ConvertFrom-Json
+  if (@($ipv6.Before).Count -ne 4 -or @($ipv6.Intercepted).Count -ne 4 -or @($ipv6.After).Count -ne 4 -or
+      @(@($ipv6.Before) + @($ipv6.After) | Where-Object { $_.TimedOut -ne $true -or $_.SyntheticReply -ne $false }).Count -or
+      @($ipv6.Intercepted | Where-Object { $_.SyntheticReply -ne $true -or $_.TimedOut -ne $false }).Count) {
+    throw 'The transparent IPv6 before/running/after report is incomplete'
+  }
   $report['checksPassed'] = $checks
   $report.lifecyclePassed = $true
 } catch {
   $failure = $_
   $report['error'] = $_.Exception.Message
 } finally {
+  if (Test-Path -LiteralPath $ipv6StatePath) {
+    try {
+      & (Join-Path $KitDirectory 'ipv6-test-fixture.ps1') -Mode Remove -StateFile $ipv6StatePath -DisposableVM
+      $network = Get-Content -LiteralPath $ipv6StatePath -Raw | ConvertFrom-Json
+      if ($network.cleanupVerified -ne $true) { throw 'Synthetic IPv6 cleanup is unverified' }
+      $report['ipv6NetworkCleanupVerified'] = $true
+    } catch {
+      $report.lifecyclePassed = $false
+      if ($null -eq $failure) { $failure = $_ }
+      $report['error'] = $_.Exception.Message
+    }
+  }
   foreach ($name in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($name,$savedEnv[$name],'Process') }
   $report['serviceAfter'] = @(Get-CimInstance Win32_Service -Filter "Name='SonDNS'" | Select-Object Name,State,StartMode,PathName)
   $report['driverAfter'] = @(Get-CimInstance Win32_SystemDriver -Filter "Name='WinDivert'" | Select-Object Name,State,StartMode,PathName)

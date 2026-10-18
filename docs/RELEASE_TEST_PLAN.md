@@ -28,6 +28,12 @@ It checks settings/SCM/tray snapshots, backup hashes and helper cleanup. This
 procedure still needs an explicit pass on each tested commit and does not cover
 GUI confirmation, UAC, power loss or every other failure stage below.
 
+The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
+address and scoped link-local address, with timeout controls before/after the
+service and removal of its temporary network entries. A non-skipped pass and
+network cleanup report are required. It does not establish public IPv6 encrypted
+upstream reachability, extension-header behavior, MTU handling or other adapters.
+
 ## Single EXE and elevation
 
 - Start with only SonDNS.exe in a folder containing spaces. Open from a different

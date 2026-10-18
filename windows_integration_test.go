@@ -87,6 +87,7 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 		}
 	})
 	t.Cleanup(releaseHeld)
+	ipv6 := prepareLifecycleIPv6(t)
 	config.Upstreams = []Upstream{{URL: stamp}}
 	config.Interception = "windivert"
 	config.LogFile = filepath.Join("data", "system.log")
@@ -290,6 +291,8 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			requireEncryptedFixtureReply(t, msg, reply)
+			ipv6.report.Intercepted = ipv6.probe(t, true)
+			t.Log("transparent IPv6 documentation and scoped link-local A/AAAA replies verified")
 			if fixtureCalls.Load() < 3 {
 				t.Fatal("service bypassed the encrypted fixture")
 			}
@@ -460,4 +463,6 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 		}
 	}
 	t.Log("runtime log: no shutdown/close/cleanup errors")
+	ipv6.report.After = ipv6.probe(t, false)
+	t.Log("IPv6 fixture after service: documentation and scoped link-local A/AAAA timed out")
 }

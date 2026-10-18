@@ -22,6 +22,7 @@ if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath "$stage.zip")) {
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item -LiteralPath $app -Destination (Join-Path $stage 'SonDNS.exe')
 Copy-Item -LiteralPath (Join-Path $Root 'scripts/run-clean-windows-tests.ps1') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $Root 'scripts/ipv6-test-fixture.ps1') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $Root 'docs/CLEAN_WINDOWS_TESTS.md') -Destination (Join-Path $stage 'README.md')
 Copy-Item -LiteralPath (Join-Path $Root 'docs/CLEAN_WINDOWS_TESTS.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $Root 'docs/RELEASE_TEST_PLAN.md') -Destination $stage

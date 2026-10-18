@@ -10,8 +10,12 @@ the explicitly dispatched disposable GitHub-hosted job described below.
 The harness has a loopback DNSCrypt upstream with a freshly pinned key and
 synthetic `sondns-test.invalid` answers. It never forwards requests to a public
 resolver, changes the system trust store or bypasses certificate verification.
-A connected virtual NIC with an IPv4 route is needed for the TEST-NET-3
-interception check; internet DNS service is not needed.
+A connected virtual NIC with an IPv4 route and enabled IPv6/link-local address
+is needed. Internet DNS and a provider's globally routed IPv6 subnet are not
+needed: the runner adds a temporary documentation IPv6 source, one /128 route
+and two synthetic static neighbors. It preserves adapter DNS, default routes,
+bindings and interface policy. The source uses SkipAsSource, so unrelated traffic
+does not select it. Conflicting existing entries are never replaced.
 
 ## Run in the VM
 
@@ -33,7 +37,15 @@ Windows features, create a VM or reboot the computer.
 The lifecycle test creates a protected unique folder under the system drive,
 installs/starts/stops/restarts/uninstalls the real service and driver, checks
 custom config/Run bindings, launches the GUI without changes, tests local UDP
-and TCP DNS, and checks transparent IPv4 UDP/53 interception. It uses saved
+and TCP DNS, and checks transparent IPv4 UDP/53 interception. It also sends A and
+AAAA queries over real UDP/IPv6 sockets to a documentation destination and a
+scoped link-local destination, requiring the synthetic upstream's answers while
+the service runs. The same four routed queries must time out before installation
+and after cleanup; routing/socket errors do not count as successful negative
+controls. The runner records setup/final network snapshots and requires removal
+of its address, host route and neighbors with interface policy unchanged. This
+does not test public IPv6 upstream connectivity or every extension header/MTU.
+It uses saved
 manual/automatic startup modes without rebooting. It holds an intercepted query
 at the encrypted upstream while stopping, checks bounded shutdown and native
 error logs, and exercises the embedded DPI process startup, forced exit,
@@ -66,7 +78,7 @@ alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
 ## Still manual
 
 This does not establish alternate-account UAC, reboot/tray startup, GUI migration
-confirmation/cancellation or all migration failure stages, DPI effectiveness/application compatibility, transparent IPv6 interception,
+confirmation/cancellation or all migration failure stages, DPI effectiveness/application compatibility,
 power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in
 the kit and RELEASING.md in the source package before release.
 
