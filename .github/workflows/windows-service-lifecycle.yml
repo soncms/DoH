@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_disposable:
-        description: 'Install the real service/driver on a temporary GitHub VM; use Windows Actions minutes'
+        description: 'Test real service/driver and temporary local accounts on a disposable GitHub VM; use Actions minutes'
         required: true
         type: boolean
         default: false

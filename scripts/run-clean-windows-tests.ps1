@@ -59,8 +59,9 @@ $savedEnv = @{}
 $failure = $null
 $ipv6StatePath = Join-Path $reportRoot 'ipv6-network.json'
 try {
-  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT','SONDNS_SERVICE_TEST_LOG','SONDNS_TEST_IPV6_NETWORK')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+  foreach ($name in @('SONDNS_SERVICE_TEST','SONDNS_ACCOUNT_TEST','SONDNS_TEST_EXE','SONDNS_SERVICE_TEST_PARENT','SONDNS_SERVICE_TEST_LOG','SONDNS_TEST_IPV6_NETWORK')) { $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
   $env:SONDNS_SERVICE_TEST = '1'
+  $env:SONDNS_ACCOUNT_TEST = '1'
   $env:SONDNS_TEST_EXE = Join-Path $KitDirectory 'SonDNS.exe'
   $env:SONDNS_SERVICE_TEST_PARENT = "$env:SystemDrive\"
   $env:SONDNS_SERVICE_TEST_LOG = Join-Path $reportRoot 'service-runtime.log'
@@ -88,6 +89,10 @@ try {
     'live GUI migration cancellation: default No, exact state and DNS unchanged',
     'live GUI migration validation failure: actual file lock, no backup, exact state and DNS unchanged',
     'live GUI migration success: confirmation, imported controls and concrete backup path verified',
+    'cross-account access verified: standard monitoring allowed; config, SCM and IPC mutations denied',
+    'cross-account administrator verified: protected access and authorized IPC log clear',
+    'cross-account handoff wait verified: separate administrator waited for the live standard-user process',
+    'temporary Windows accounts removed and owned child exited',
     'IPv6 fixture before service: documentation and scoped link-local A/AAAA timed out',
     'transparent IPv6 documentation and scoped link-local A/AAAA replies verified',
     'IPv6 fixture after service: documentation and scoped link-local A/AAAA timed out')
@@ -111,6 +116,19 @@ try {
       @(@($ipv6.Before) + @($ipv6.After) | Where-Object { $_.TimedOut -ne $true -or $_.SyntheticReply -ne $false }).Count -or
       @($ipv6.Intercepted | Where-Object { $_.SyntheticReply -ne $true -or $_.TimedOut -ne $false }).Count) {
     throw 'The transparent IPv6 before/running/after report is incomplete'
+  }
+  $accounts = Get-Content -LiteralPath (Join-Path $reportRoot 'accounts.json') -Raw | ConvertFrom-Json
+  if ($accounts.StandardVerified -ne $true -or $accounts.AdministratorVerified -ne $true -or
+      $accounts.HandoffVerified -ne $true -or $accounts.ChildExited -ne $true -or $accounts.AccountsRemoved -ne $true -or
+      $accounts.Standard.Elevated -ne $false -or $accounts.Standard.Administrator -ne $false -or
+      $accounts.Administrator.Elevated -ne $true -or $accounts.Administrator.Administrator -ne $true -or
+      $accounts.Standard.ConfigWriteDenied -ne 5 -or $accounts.Standard.SCMMutateDenied -ne 5 -or
+      $accounts.Standard.PipeCreateDenied -ne 5 -or @($accounts.Standard.RejectedOperations).Count -ne 2 -or
+      $accounts.Standard.Removed -ne $true -or $accounts.Administrator.Removed -ne $true -or
+      $accounts.Administrator.LogClearAllowed -ne $true -or $accounts.HandoffError -or
+      $accounts.ChildSID -cne $accounts.Standard.SID -or $accounts.CreatorSID -ceq $accounts.Standard.SID -or
+      $accounts.CreatorSID -ceq $accounts.Administrator.SID -or $accounts.Standard.SID -ceq $accounts.Administrator.SID) {
+    throw 'The real cross-account access/handoff/cleanup report is incomplete'
   }
   $report['checksPassed'] = $checks
   $report.lifecyclePassed = $true

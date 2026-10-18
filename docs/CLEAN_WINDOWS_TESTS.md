@@ -86,6 +86,20 @@ alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
 
 ## Still manual
 
+The lifecycle additionally creates two uniquely named temporary local Windows
+accounts (standard user and separate administrator), logs them on with random
+in-memory passwords, and exercises their real tokens against the running
+service. Standard-user config/SCM/IPC monitoring must work; config write, SCM
+mutation handles, pipe-server creation and IPC mutations must be denied. The
+separate elevated administrator must be able to open management handles and
+clear the actual service log. Config bytes must stay unchanged and DNS must
+remain usable. A live windowless standard-user child additionally checks the
+production PID handoff wait from the other administrator's token. Both accounts
+and the owned child must be removed/exited and reported in `accounts.json`.
+This procedure requires an explicit pass on the tested commit. It does not
+operate the Manage button, credential prompt, secure desktop or GUI/tray under
+the other account, and does not establish the full UAC handoff flow.
+
 This does not establish alternate-account UAC, reboot/tray startup,
 all migration failure stages, DPI effectiveness/application compatibility,
 power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in

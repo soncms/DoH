@@ -31,6 +31,14 @@ controls and a concrete backup path. Each procedure still needs an explicit
 pass on the tested commit. This covers an already elevated session; UAC, power
 loss and the other failure stages below remain separate cases.
 
+The account fixture uses two newly created local Windows identities and actual
+logon tokens to check standard-user monitoring/denied management and a separate
+elevated administrator's authorized IPC log clear. Its live windowless child
+also checks the native process handoff wait. It removes the owned accounts and
+child and records `accounts.json`; no existing account or UAC policy is changed.
+A pass proves those token/ACL/backend operations, not the credential prompt,
+secure desktop, Manage-button handoff or cross-account GUI/tray startup.
+
 The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
 address and scoped link-local address, with timeout controls before/after the
 service and removal of its temporary network entries. A non-skipped pass and
