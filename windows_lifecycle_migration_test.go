@@ -51,6 +51,7 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 			t.Logf("retaining migration fixture for recovery: %s", targetRoot)
 			return
 		}
+		requireLifecycleMigrationTray(t, migrationTrayValue{})
 		requireNoLifecycleDPI(t, sourceHelper)
 		requireNoLifecycleDPI(t, targetHelper)
 		report.CleanupVerified = true
