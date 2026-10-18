@@ -39,7 +39,20 @@ at the encrypted upstream while stopping, checks bounded shutdown and native
 error logs, and exercises the embedded DPI process startup, forced exit,
 automatic restart and shutdown. Process termination is restricted to a handle
 whose image path matches the unique fixture. A quiet stop includes 500 ms without
-harness DNS queries; Windows background DNS is not suppressed. It removes its
+harness DNS queries; Windows background DNS is not suppressed.
+
+The same opt-in test installs a running automatic service with custom settings,
+dependencies and delayed startup, then uses the production migration hooks.
+An exclusive lock on the candidate EXE forces a real SCM startup error; the test
+requires the previous binding and running DNS to recover, exact destination
+config bytes and tray value/type to survive, and all source/backup hashes to match.
+A subsequent successful migration checks imported settings, custom config/tray
+paths, unrelated SCM fields, UDP/TCP DNS and the old/new embedded DPI processes.
+Cleanup calls uninstall from the currently owning fixture EXE and verifies both
+helper paths, service, driver and tray are absent. Reports retain journals,
+manifests and logs; inert backed-up EXE/runtime `.bin` files are not uploaded.
+
+It removes its
 fixture when cleanup succeeds, and retains it when recovery is needed. Logs and JSON results
 are saved in `reports/` under the kit folder. A skipped lifecycle test is a
 failure of the runner, never a claimed pass.
@@ -52,8 +65,8 @@ alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
 
 ## Still manual
 
-This does not establish alternate-account UAC, reboot/tray startup, live
-migration/rollback, DPI effectiveness/application compatibility, transparent IPv6 interception,
+This does not establish alternate-account UAC, reboot/tray startup, GUI migration
+confirmation/cancellation or all migration failure stages, DPI effectiveness/application compatibility, transparent IPv6 interception,
 power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in
 the kit and RELEASING.md in the source package before release.
 

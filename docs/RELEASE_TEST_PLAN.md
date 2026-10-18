@@ -21,6 +21,13 @@ test procedures until a non-skipped pass is recorded for the changed commit.
 The quiet interval does not exclude Windows background traffic. Process
 lifecycle checks do not establish DPI effectiveness or application compatibility.
 
+The harness additionally runs production migration hooks against a running
+service: a real SCM startup failure while the candidate image is exclusively
+locked must roll back and restore DNS, followed by a successful migration.
+It checks settings/SCM/tray snapshots, backup hashes and helper cleanup. This
+procedure still needs an explicit pass on each tested commit and does not cover
+GUI confirmation, UAC, power loss or every other failure stage below.
+
 ## Single EXE and elevation
 
 - Start with only SonDNS.exe in a folder containing spaces. Open from a different
@@ -61,7 +68,9 @@ lifecycle checks do not establish DPI effectiveness or application compatibility
 
 The preview includes an explicit **Migrate existing service…** action. Normal
 commands must still refuse a service in another folder. The transaction tests
-and stopped SCM fixture do not establish a live migration; record these results:
+and stopped SCM fixture alone do not establish a live migration. The disposable
+lifecycle report supplies the running-service and locked-image rollback cases
+only after a non-skipped pass; record the remaining cases below:
 
 - Back up old config/startup/SCM binding and preserve old EXE/runtime before any
   change. Show source/destination and expected interruption before confirmation.

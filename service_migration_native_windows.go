@@ -155,7 +155,13 @@ func migrateExistingService(p serviceMigrationPlan) (string, error) {
 		return "", err
 	}
 	defer s.Close()
-	return executeServiceMigration(p, scmMigrationService{s}, migrationHooks{
+	return executeServiceMigration(p, scmMigrationService{s}, nativeMigrationHooks(p))
+}
+
+// Keep the disposable live-migration test on the same file validation, backup
+// and registry implementation used by the confirmed GUI migration.
+func nativeMigrationHooks(p serviceMigrationPlan) migrationHooks {
+	return migrationHooks{
 		Validate: func() error { return validateMigrationFiles(p) },
 		Stage:    func() (migrationStage, error) { return stageServiceMigration(p) },
 		ChangeTray: func() (func() error, error) {
@@ -167,5 +173,5 @@ func migrateExistingService(p serviceMigrationPlan) (string, error) {
 			}
 			return validateMigrationFiles(p)
 		},
-	})
+	}
 }

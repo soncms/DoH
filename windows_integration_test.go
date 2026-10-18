@@ -35,6 +35,13 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	if before.Exists {
 		t.Skip("SonDNS already installed; will not alter it")
 	}
+	tray, err := readMigrationTray(registry.LOCAL_MACHINE, runRegistryKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tray.Exists {
+		t.Skip("SonDNS tray startup already exists; will not alter it")
+	}
 	scm, err := mgr.Connect()
 	if err != nil {
 		t.Fatal(err)
@@ -429,6 +436,7 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 			t.Fatalf("uninstall incomplete: %+v %v", snap, err)
 		}
 	}
+	runLifecycleMigration(t, built, binary, path, parent, config)
 	// Ensure saved config remains valid JSON after the full lifecycle.
 	bytes, err := os.ReadFile(path)
 	if err != nil || !json.Valid(bytes) {

@@ -126,7 +126,8 @@ jobs:
           [ordered]@{
             buildOutcome = $env:SONDNS_BUILD_OUTCOME; testOutcome = $env:SONDNS_TEST_OUTCOME
             lifecyclePassed = $passed; fullReleaseValidationPassed = $false
-            stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'live migration and rollback',
+            stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'GUI migration confirmation/cancellation and other failure stages',
+              'power-loss and manual recovery',
               'DPI effectiveness and application compatibility', 'transparent IPv6 interception', 'publisher signing', 'maintainer release review')
           } | ConvertTo-Json | Set-Content -LiteralPath "$reports/workflow-result.json" -Encoding utf8
           @("Lifecycle pass observed: $passed", "", "Full release validation: false. Review the report and remaining manual cases.") |

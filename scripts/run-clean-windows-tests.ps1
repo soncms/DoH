@@ -67,8 +67,8 @@ try {
   Save-Report
   $stdout = Join-Path $reportRoot 'service-test.log'
   $stderr = Join-Path $reportRoot 'service-test.err'
-  $process = Start-Process -FilePath (Join-Path $KitDirectory 'SonDNS.tests.exe') -ArgumentList @('-test.v','-test.run=^TestWindowsServiceLifecycle$','-test.timeout=120s') -WorkingDirectory $KitDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-  if (-not $process.WaitForExit(140000)) { $process.Kill(); $process.WaitForExit(); throw 'Lifecycle test timed out; inspect surviving service/driver, then restore the VM snapshot or discard the hosted VM' }
+  $process = Start-Process -FilePath (Join-Path $KitDirectory 'SonDNS.tests.exe') -ArgumentList @('-test.v','-test.run=^TestWindowsServiceLifecycle$','-test.timeout=180s') -WorkingDirectory $KitDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  if (-not $process.WaitForExit(200000)) { $process.Kill(); $process.WaitForExit(); throw 'Lifecycle test timed out; inspect surviving service/driver, then restore the VM snapshot or discard the hosted VM' }
   $process.Refresh()
   $report['testExitCode'] = $process.ExitCode
   $log = Get-Content -LiteralPath $stdout -Raw
@@ -77,11 +77,21 @@ try {
   }
   $checks = @('in-flight intercepted query held upstream during stop',
     'embedded DPI helper restarted after forced exit', 'embedded DPI helper stopped without orphan',
-    'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors')
+    'quiet stop completed (OS background traffic not excluded)', 'runtime log: no shutdown/close/cleanup errors',
+    'live migration rollback after real SCM startup failure',
+    'live migration completed: custom config, SCM fields, tray, backup hashes and DNS verified',
+    'live migration cleanup verified: service, driver, tray and both helper paths absent')
   foreach ($check in $checks) {
     if (-not $log.Contains($check)) { throw "Lifecycle evidence is missing: $check" }
   }
   if (-not (Test-Path -LiteralPath $env:SONDNS_SERVICE_TEST_LOG -PathType Leaf)) { throw 'Service runtime log is missing' }
+  $migration = Get-Content -LiteralPath (Join-Path $reportRoot 'migration.json') -Raw | ConvertFrom-Json
+  if ($migration.RollbackVerified -ne $true -or $migration.MigrationVerified -ne $true -or
+      $migration.CleanupVerified -ne $true -or $migration.SCMStartErrorCode -le 0 -or
+      $migration.RollbackBackup.Status -cne 'rolled-back' -or $migration.CompletedBackup.Status -cne 'complete' -or
+      $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1) {
+    throw 'The live migration/rollback report is incomplete'
+  }
   $report['checksPassed'] = $checks
   $report.lifecyclePassed = $true
 } catch {
