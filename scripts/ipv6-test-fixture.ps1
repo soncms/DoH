@@ -32,6 +32,18 @@ function Get-FixtureNeighbors([string]$Address) {
   @(Get-NetNeighbor -AddressFamily IPv6 -PolicyStore ActiveStore -InterfaceIndex $script:state.interfaceIndex |
     Where-Object { $_.IPAddress -eq $Address })
 }
+function Clear-FixtureCache([string]$Kind, [string]$Address) {
+  if ($Kind -notin @('destinationcache','neighbors') -or
+      $Address -notin @($script:state.destination,$script:state.linkLocalDestination)) {
+    throw 'Refuse a cache flush outside the exact synthetic destinations'
+  }
+  # Both netsh commands support an exact interface + address. Never flush
+  # an entire interface; its cached paths can still serve unrelated traffic.
+  $arguments = @('interface','ipv6','delete',$Kind,"interface=$($script:state.interfaceIndex)","address=$Address")
+  if ($Kind -eq 'neighbors') { $arguments += 'store=active' }
+  $output = & "$env:SystemRoot/System32/netsh.exe" @arguments 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Exact synthetic IPv6 $Kind flush failed: $output" }
+}
 function Get-FixtureInterface {
   Get-NetIPInterface -AddressFamily IPv6 -InterfaceIndex $script:state.interfaceIndex |
     Select-Object Dhcp,RouterDiscovery,AutomaticMetric,InterfaceMetric,NlMtu,ConnectionState
@@ -83,13 +95,16 @@ function Remove-Fixture {
   )) {
     if ($script:state.($entry.owned)) {
       $neighbors = @(Get-FixtureNeighbors $entry.address)
-      $observation = [ordered]@{ address=$entry.address; before=@($neighbors | Select-Object IPAddress,LinkLayerAddress,State); after=@(); removed=$false }
+      $observation = [ordered]@{ address=$entry.address; before=@($neighbors | Select-Object IPAddress,LinkLayerAddress,State)
+        destinationCacheFlushed=$false; afterStaticRemoval=@(); neighborCacheFlushed=$false; after=@(); removed=$false }
       $script:state.neighborRemoval += $observation
       Save-Fixture
       foreach ($neighbor in $neighbors) {
         if ($neighbor.LinkLayerAddress -ine $script:state.neighborMAC -or $neighbor.State -ne 'Permanent') {
           throw 'IPv6 neighbor changed concurrently; cleanup did not overwrite it'
         }
+        Clear-FixtureCache 'destinationcache' $entry.address
+        $observation.destinationCacheFlushed = $true
         # Use an explicit store/key instead of CIM InputObject deletion. Keep
         # ownership until a fresh query confirms disappearance, not just a
         # successful command return.
@@ -99,8 +114,26 @@ function Remove-Fixture {
       do {
         $remaining = @(Get-FixtureNeighbors $entry.address)
         if (-not $remaining.Count) { break }
+        if (@($remaining | Where-Object { $_.LinkLayerAddress -eq '00-00-00-00-00-00' -and $_.State -eq 'Unreachable' }).Count -eq $remaining.Count) { break }
         Start-Sleep -Milliseconds 200
       } while ([DateTime]::UtcNow -lt $deadline)
+      $observation.afterStaticRemoval = @($remaining | Select-Object IPAddress,LinkLayerAddress,State)
+      if ($remaining.Count -and @($remaining | Where-Object {
+          $_.LinkLayerAddress -eq '00-00-00-00-00-00' -and $_.State -eq 'Unreachable'
+        }).Count -eq $remaining.Count) {
+        # Windows can retain an unreachable zero-MAC cache row after deleting
+        # the owned permanent mapping. Purge only that exact cache key, then
+        # still require complete disappearance. A changed usable mapping is
+        # never overwritten by this fallback.
+        Clear-FixtureCache 'neighbors' $entry.address
+        $observation.neighborCacheFlushed = $true
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+          $remaining = @(Get-FixtureNeighbors $entry.address)
+          if (-not $remaining.Count) { break }
+          Start-Sleep -Milliseconds 200
+        } while ([DateTime]::UtcNow -lt $deadline)
+      }
       $observation.after = @($remaining | Select-Object IPAddress,LinkLayerAddress,State)
       Save-Fixture
       if ($remaining.Count) { throw "IPv6 neighbor removal not confirmed: $($observation.after | ConvertTo-Json -Compress)" }
