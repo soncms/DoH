@@ -29,12 +29,11 @@ func TestLifecycleGUIHandoffAccountChild(t *testing.T) {
 	if *lifecycleHandoffEvents == "" {
 		t.Skip("owned account process fixture")
 	}
-	if os.Getenv("SONDNS_ACCOUNT_TEST") != "1" || os.Getenv("SONDNS_SERVICE_TEST") != "1" ||
-		*lifecycleHandoffReport == "" || windows.GetCurrentProcessToken().IsElevated() {
-		t.Fatal("handoff child requires the opted-in standard-account fixture")
-	}
-	report := lifecycleHandoffAccessReport{Stage: "open-events"}
+	report := lifecycleHandoffAccessReport{Stage: "guard"}
 	defer func() {
+		if *lifecycleHandoffReport == "" {
+			return
+		}
 		report.Failed = t.Failed()
 		data, err := json.MarshalIndent(report, "", "  ")
 		if err == nil {
@@ -44,6 +43,11 @@ func TestLifecycleGUIHandoffAccountChild(t *testing.T) {
 			t.Errorf("write handoff child report: %v", err)
 		}
 	}()
+	if os.Getenv("SONDNS_ACCOUNT_TEST") != "1" || os.Getenv("SONDNS_SERVICE_TEST") != "1" ||
+		*lifecycleHandoffReport == "" || windows.GetCurrentProcessToken().IsElevated() {
+		t.Fatal("handoff child requires the opted-in standard-account fixture")
+	}
+	report.Stage = "open-events"
 	events := make(map[string]windows.Handle)
 	for _, label := range []string{"alive", "prepare", "ready", "exit"} {
 		name, err := windows.UTF16PtrFromString(*lifecycleHandoffEvents + "." + label)
@@ -128,4 +132,34 @@ func waitLifecycleHandoffEvent(t *testing.T, event windows.Handle, label string)
 	if err != nil || state != windows.WAIT_OBJECT_0 {
 		t.Fatalf("wait for handoff %s: status=%d error=%v", label, state, err)
 	}
+}
+
+func waitLifecycleHandoffChildEvent(t *testing.T, event, child windows.Handle, label string) {
+	t.Helper()
+	state, err := windows.WaitForMultipleObjects([]windows.Handle{event, child}, false, 10_000)
+	if err != nil || state != windows.WAIT_OBJECT_0 {
+		var exit uint32
+		exitErr := windows.GetExitCodeProcess(child, &exit)
+		t.Fatalf("wait for handoff child %s: status=%d error=%v childExit=%d exitError=%v", label, state, err, exit, exitErr)
+	}
+}
+
+func lifecycleHandoffEnvironment(t *testing.T) []uint16 {
+	t.Helper()
+	root, err := windows.GetWindowsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A NULL environment creates the target user's profile environment, not
+	// the caller's. Pass only these fixture opt-ins and Windows DLL base paths;
+	// do not forward the CI runner's credentials or remaining environment.
+	var block []uint16
+	for _, entry := range []string{"SONDNS_ACCOUNT_TEST=1", "SONDNS_SERVICE_TEST=1", "SystemRoot=" + root, "WINDIR=" + root} {
+		value, err := windows.UTF16FromString(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block = append(block, value...)
+	}
+	return append(block, 0)
 }

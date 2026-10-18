@@ -43,6 +43,8 @@ type lifecycleAccountsReport struct {
 	CreatorSID, ConfigSHA256, ChildSID, HandoffError         string
 	Standard, Administrator                                  lifecycleAccountReport
 	ChildPID                                                 uint32
+	ChildExitCode                                            uint32
+	ChildForced                                              bool
 	HandoffWait                                              time.Duration
 	HandoffBeforeDenied                                      uint32
 	HandoffControlDenied                                     map[string]uint32
@@ -426,9 +428,11 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		"-sondns-handoff-events=" + prefix, "-sondns-handoff-report=" + childReport}))
 	directory, _ := windows.UTF16PtrFromString(cwd)
 	startup := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{})), Flags: windows.STARTF_USESHOWWINDOW, ShowWindow: windows.SW_HIDE}
+	environment := lifecycleHandoffEnvironment(t)
 	var child windows.ProcessInformation
 	ok, _, err := lifecycleCreateWithToken.Call(uintptr(standard.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
-		windows.CREATE_NO_WINDOW, 0, uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
+		windows.CREATE_NO_WINDOW|windows.CREATE_UNICODE_ENVIRONMENT, uintptr(unsafe.Pointer(&environment[0])),
+		uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
 	if ok == 0 {
 		t.Fatalf("start owned standard-account wait fixture: %v", err)
 	}
@@ -436,12 +440,18 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 	defer func() {
 		state, err := windows.WaitForSingleObject(child.Process, 0)
 		if err == nil && state == uint32(windows.WAIT_TIMEOUT) {
+			report.ChildForced = true
 			_ = windows.TerminateProcess(child.Process, 1)
 			state, err = windows.WaitForSingleObject(child.Process, 5000)
 		}
 		report.ChildExited = err == nil && state == windows.WAIT_OBJECT_0
 		if !report.ChildExited {
 			t.Errorf("owned account child remains: wait=%d error=%v", state, err)
+		}
+		if report.ChildExited {
+			if err := windows.GetExitCodeProcess(child.Process, &report.ChildExitCode); err != nil {
+				t.Errorf("query owned child exit code: %v", err)
+			}
 		}
 		_ = windows.CloseHandle(child.Process)
 	}()
@@ -456,7 +466,7 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 		t.Fatalf("wait child identity differs: %v", err)
 	}
 	report.ChildSID = user.User.Sid.String()
-	waitLifecycleHandoffEvent(t, events["alive"], "standard-account child startup")
+	waitLifecycleHandoffChildEvent(t, events["alive"], child.Process, "standard-account startup")
 	state, err := windows.WaitForSingleObject(child.Process, 0)
 	if err != nil || state != uint32(windows.WAIT_TIMEOUT) {
 		t.Fatalf("account wait fixture already exited: %d %v", state, err)
@@ -474,7 +484,7 @@ func runLifecycleAccountHandoff(t *testing.T, standard, admin *lifecycleAccount,
 	if err := windows.SetEvent(events["prepare"]); err != nil {
 		t.Fatal(err)
 	}
-	waitLifecycleHandoffEvent(t, events["ready"], "production permission preparation and exact restoration")
+	waitLifecycleHandoffChildEvent(t, events["ready"], child.Process, "production preparation and exact restoration")
 	report.HandoffControlDenied = make(map[string]uint32)
 	admin.as(func() {
 		for label, access := range map[string]uint32{"terminate": windows.PROCESS_TERMINATE,

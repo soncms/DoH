@@ -120,6 +120,7 @@ try {
   $accounts = Get-Content -LiteralPath (Join-Path $reportRoot 'accounts.json') -Raw | ConvertFrom-Json
   if ($accounts.StandardVerified -ne $true -or $accounts.AdministratorVerified -ne $true -or
       $accounts.HandoffVerified -ne $true -or $accounts.ChildExited -ne $true -or $accounts.AccountsRemoved -ne $true -or
+      $accounts.ChildForced -ne $false -or $accounts.ChildExitCode -ne 0 -or
       $accounts.Standard.Elevated -ne $false -or $accounts.Standard.Administrator -ne $false -or
       $accounts.Administrator.Elevated -ne $true -or $accounts.Administrator.Administrator -ne $true -or
       $accounts.Standard.ConfigWriteDenied -ne 5 -or $accounts.Standard.SCMMutateDenied -ne 5 -or
