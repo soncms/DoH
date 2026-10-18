@@ -23,6 +23,7 @@ import (
 type lifecycleMigrationGUIReport struct {
 	MenuText, Confirmation, FailureDetails, FailureStatus, SuccessStatus string
 	DefaultButton                                                        uint16
+	FailureButtonID                                                      int32
 	CancelledUnchanged, ValidationFailureUnchanged, Completed            bool
 	ProcessesReaped                                                      int
 }
@@ -285,6 +286,33 @@ func (g *lifecycleGUI) click(dialog win.HWND, id int32) {
 	g.wait("dialog dismissed", func() bool { return !g.owns(dialog) || g.text(dialog) != title })
 }
 
+func (g *lifecycleGUI) acknowledgeFailure(dialog win.HWND) {
+	g.t.Helper()
+	var button win.HWND
+	// On Server 2022 an MB_OK box has one visible "OK" control whose native
+	// ID is IDCANCEL (2). Identify that actual sole acknowledgement control;
+	// do not assume its control ID equals the result returned by MessageBox.
+	g.wait("sole OK acknowledgement button", func() bool {
+		var buttons []win.HWND
+		for _, h := range lifecycleGUIWindows(dialog) {
+			if g.owns(h) && strings.EqualFold(lifecycleGUIClass(h), "Button") {
+				buttons = append(buttons, h)
+			}
+		}
+		if len(buttons) != 1 || !win.IsWindowEnabled(buttons[0]) || g.text(buttons[0]) != "OK" {
+			return false
+		}
+		button = buttons[0]
+		return true
+	})
+	id := win.GetWindowLong(button, win.GWL_ID)
+	if id != win.IDOK && id != win.IDCANCEL {
+		g.t.Fatalf("unexpected sole OK button control ID: %d", id)
+	}
+	g.report.FailureButtonID = id
+	g.click(dialog, id)
+}
+
 func requireNoLifecycleGUIBackup(t *testing.T, target string) {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(filepath.Dir(target), "backups"))
@@ -332,7 +360,7 @@ func runLifecycleGUIRejects(t *testing.T, p serviceMigrationPlan, report *lifecy
 	if report.FailureStatus != "Migration failed; review the error details" {
 		t.Fatalf("pre-stage failure points at a nonexistent recovery report: %q", report.FailureStatus)
 	}
-	g.click(failure, win.IDOK)
+	g.acknowledgeFailure(failure)
 	if err := windows.CloseHandle(lock); err != nil {
 		t.Fatal(err)
 	}

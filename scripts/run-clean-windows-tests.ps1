@@ -102,6 +102,7 @@ try {
       $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1 -or
       $migration.GUI.CancelledUnchanged -ne $true -or $migration.GUI.ValidationFailureUnchanged -ne $true -or
       $migration.GUI.Completed -ne $true -or $migration.GUI.DefaultButton -ne 7 -or
+      $migration.GUI.FailureButtonID -notin @(1,2) -or
       $migration.GUI.ProcessesReaped -ne 2) {
     throw 'The live migration/rollback report is incomplete'
   }
