@@ -68,11 +68,9 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	config.Upstreams = []Upstream{{URL: stamp}}
 	config.Interception = "windivert"
 	config.LogFile = filepath.Join("data", "system.log")
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	packet, ln := listenTestDNSPair(t)
 	config.Listen = ln.Addr().String()
+	_ = packet.Close()
 	_ = ln.Close()
 	config.Timeout = 3 * time.Second
 	parent := os.Getenv("SONDNS_SERVICE_TEST_PARENT")

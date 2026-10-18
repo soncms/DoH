@@ -12,9 +12,12 @@ WinDivert DNS interception and an optional zapret2 DPI helper.
 SonDNS is being prepared for its first public release. Current local builds
 are unsigned previews. Source packaging, offline application rebuilds, native
 source correspondence, core race tests, native widgets and an isolated stopped
-SCM fixture have been verified locally. Full service/driver lifecycle, manual
-UAC flows and migration still require testing on a clean Windows machine.
-GitHub Actions has not run for the current unpushed changes.
+SCM fixture have been verified locally. [GitHub Actions](https://github.com/soncms/DoH/actions)
+runs Windows verification; the separate disposable service/driver lifecycle
+workflow requires manual dispatch. Check each report's commit and artifact
+hashes before applying its result to a build. Alternate-account UAC, reboot,
+live migration and the remaining release cases still require manual evidence.
+See the [clean Windows test guide](docs/CLEAN_WINDOWS_TESTS.md).
 
 ## Run
 

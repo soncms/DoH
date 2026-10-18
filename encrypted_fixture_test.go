@@ -36,29 +36,50 @@ func startLocalEncryptedDNSFixture(t *testing.T) (stamp string, calls *atomic.In
 		return w.WriteMsg(ctx, encryptedFixtureReply(q))
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	var address string
-	for _, protocol := range []dnscrypt.Proto{dnscrypt.ProtoUDP, dnscrypt.ProtoTCP} {
-		addr := netip.MustParseAddrPort("127.0.0.1:0")
-		if address != "" {
-			addr = netip.MustParseAddrPort(address)
-		}
-		server, err := dnscrypt.NewServer(&dnscrypt.ServerConfig{ProviderName: rc.ProviderName, ResolverCert: cert,
-			Addr: addr, Proto: protocol, Handler: handler, Logger: logger})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := server.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
+	shutdown := func(servers []*dnscrypt.Server) {
+		for _, server := range servers {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			if err := server.Shutdown(ctx); err != nil {
+			err := server.Shutdown(ctx)
+			cancel()
+			if err != nil {
 				t.Errorf("fixture shutdown: %v", err)
 			}
-		})
-		address = server.LocalAddr().String()
+		}
 	}
+	var address string
+	var servers []*dnscrypt.Server
+	var lastErr error
+	for range 32 {
+		address = ""
+		servers = nil
+		// TCP :0 avoids ports reserved only for TCP on Windows. If UDP cannot
+		// share the selected port, close this attempt and choose another pair.
+		for _, protocol := range []dnscrypt.Proto{dnscrypt.ProtoTCP, dnscrypt.ProtoUDP} {
+			addr := netip.MustParseAddrPort("127.0.0.1:0")
+			if address != "" {
+				addr = netip.MustParseAddrPort(address)
+			}
+			server, err := dnscrypt.NewServer(&dnscrypt.ServerConfig{ProviderName: rc.ProviderName, ResolverCert: cert,
+				Addr: addr, Proto: protocol, Handler: handler, Logger: logger})
+			if err == nil {
+				err = server.Start(context.Background())
+			}
+			if err != nil {
+				lastErr = err
+				break
+			}
+			servers = append(servers, server)
+			address = server.LocalAddr().String()
+		}
+		if len(servers) == 2 {
+			break
+		}
+		shutdown(servers)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("cannot start loopback DNSCrypt TCP/UDP pair: %v", lastErr)
+	}
+	t.Cleanup(func() { shutdown(servers) })
 	pin, err := rc.CreateStamp(address)
 	if err != nil {
 		t.Fatal(err)
@@ -128,5 +149,23 @@ func TestLocalPinnedDNSCryptFixture(t *testing.T) {
 	}
 	if got := calls.Load(); got != 4 {
 		t.Fatalf("queries did not all reach pinned encrypted fixture: %d", got)
+	}
+	// Exercise the TCP listener explicitly as well as the engine's UDP path.
+	client := dnscrypt.NewClient(&dnscrypt.ClientConfig{Proto: dnscrypt.ProtoTCP})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	info, err := client.DialContext(ctx, stamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := new(dns.Msg)
+	q.SetQuestion("sondns-test.invalid.", dns.TypeA)
+	r, err := client.ExchangeContext(ctx, q, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEncryptedFixtureReply(t, q, r)
+	if got := calls.Load(); got != 5 {
+		t.Fatalf("TCP query did not reach pinned fixture: %d", got)
 	}
 }

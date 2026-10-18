@@ -208,14 +208,7 @@ func TestBootstrapBoundsConcurrencyAndCancelsLosers(t *testing.T) {
 }
 
 func TestBootstrapCancellationAndTCPFallback(t *testing.T) {
-	packet, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tcp, err := net.Listen("tcp", packet.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
+	packet, tcp := listenTestDNSPair(t)
 	handler := dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
 		if strings.HasPrefix(q.Question[0].Name, "stall.") {
 			return
