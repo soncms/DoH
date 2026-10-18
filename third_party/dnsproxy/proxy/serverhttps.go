@@ -1,0 +1,381 @@
+package proxy
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"strings"
+
+	"github.com/AdguardTeam/dnsproxy/internal/bootstrap"
+	"github.com/AdguardTeam/golibs/httphdr"
+	"github.com/AdguardTeam/golibs/ioutil"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/net/http2"
+)
+
+// listenHTTP creates instances of TLS listeners that will be used to run an
+// HTTP/1.1 and HTTP/2 servers.  It returns the address the listener actually
+// listens to.  addr must not be nil.
+func (p *Proxy) listenHTTP(
+	ctx context.Context,
+	addr *net.TCPAddr,
+) (ln net.Listener, tcpAddr *net.TCPAddr, err error) {
+	var tcpListen *net.TCPListener
+	err = p.bindWithRetry(ctx, func() (listenErr error) {
+		tcpListen, listenErr = net.ListenTCP(bootstrap.NetworkTCP, addr)
+
+		// Don't wrap the error since it's informative enough as is.
+		return listenErr
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("tcp listener: %w", err)
+	}
+
+	laddr := tcpListen.Addr()
+	tcpAddr, ok := laddr.(*net.TCPAddr)
+	if !ok {
+		return nil, nil, fmt.Errorf("bad listener address type: %T", laddr)
+	}
+
+	p.logger.InfoContext(ctx, "listening to https", "addr", tcpAddr)
+
+	tlsConfig := p.tlsConf.Clone()
+	tlsConfig.NextProtos = []string{http2.NextProtoTLS, "http/1.1"}
+
+	tlsListen := tls.NewListener(tcpListen, tlsConfig)
+
+	return tlsListen, tcpAddr, nil
+}
+
+// listenH3 creates instances of QUIC listeners that will be used for running
+// an HTTP/3 server.  addr must not be nil.
+func (p *Proxy) listenH3(
+	ctx context.Context,
+	addr *net.UDPAddr,
+) (ln *quic.EarlyListener, err error) {
+	tlsConfig := p.tlsConf.Clone()
+	tlsConfig.NextProtos = []string{"h3"}
+	quicListen, err := quic.ListenAddrEarly(addr.String(), tlsConfig, newServerDoH3Config())
+	if err != nil {
+		return nil, fmt.Errorf("quic listener: %w", err)
+	}
+
+	p.logger.InfoContext(ctx, "listening to h3", "addr", quicListen.Addr())
+
+	return quicListen, nil
+}
+
+// newServerDoH3Config creates *quic.Config populated with the default settings.
+// This function is supposed to be used for the DoH3 server only.
+func newServerDoH3Config() (conf *quic.Config) {
+	return &quic.Config{
+		MaxIdleTimeout: maxQUICIdleTimeout,
+		// Enable 0-RTT by default for all connections on the server-side.
+		Allow0RTT: true,
+	}
+}
+
+// initHTTPSListeners creates TCP/UDP listeners and HTTP/H3 servers.
+func (p *Proxy) initHTTPSListeners(ctx context.Context) (err error) {
+	httpConf := p.httpConf
+	if httpConf == nil {
+		p.logger.DebugContext(ctx, "no https configuration provided")
+
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	p.routeDoH(mux)
+
+	p.httpsServer = &http.Server{
+		Handler:           mux,
+		ReadTimeout:       httpConf.ReadTimeout,
+		ReadHeaderTimeout: httpConf.ReadTimeout,
+		WriteTimeout:      httpConf.WriteTimeout,
+	}
+
+	if httpConf.HTTP3Enabled {
+		p.h3Server = &http3.Server{
+			Handler: mux,
+		}
+	}
+
+	for _, addr := range httpConf.ListenAddresses {
+		p.logger.InfoContext(ctx, "creating an https server")
+
+		ln, tcpAddr, lErr := p.listenHTTP(ctx, net.TCPAddrFromAddrPort(addr))
+		if lErr != nil {
+			return fmt.Errorf("failed to start https server on %s: %w", addr, lErr)
+		}
+
+		p.httpsListen = append(p.httpsListen, ln)
+
+		if httpConf.HTTP3Enabled {
+			// HTTP/3 server listens to the same pair IP:port as the one HTTP/2
+			// server listens to.
+			udpAddr := &net.UDPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port}
+
+			var quicListen *quic.EarlyListener
+			quicListen, err = p.listenH3(ctx, udpAddr)
+			if err != nil {
+				return fmt.Errorf("failed to start h3 server on %s: %w", udpAddr, err)
+			}
+
+			p.h3Listen = append(p.h3Listen, quicListen)
+		}
+	}
+
+	return nil
+}
+
+// newDoHReq returns new DNS request parsed from the given HTTP request.  In
+// case of invalid request returns nil and the suitable status code for an HTTP
+// error response.  r and l must not be nil.
+func newDoHReq(
+	ctx context.Context,
+	r *http.Request,
+	l *slog.Logger,
+) (req *dns.Msg, statusCode int) {
+	var buf []byte
+	var err error
+
+	switch r.Method {
+	case http.MethodGet:
+		dnsParam := r.URL.Query().Get("dns")
+		buf, err = base64.RawURLEncoding.DecodeString(dnsParam)
+		if len(buf) == 0 || err != nil {
+			l.DebugContext(
+				ctx,
+				"parsing dns request from http get param",
+				"param_name", dnsParam,
+				slogutil.KeyError, err,
+			)
+
+			return nil, http.StatusBadRequest
+		}
+	case http.MethodPost:
+		contentType := r.Header.Get(httphdr.ContentType)
+		if contentType != "application/dns-message" {
+			l.DebugContext(ctx, "unsupported media type", "content_type", contentType)
+
+			return nil, http.StatusUnsupportedMediaType
+		}
+
+		limitBody := ioutil.LimitReader(r.Body, dns.MaxMsgSize)
+		buf, err = io.ReadAll(limitBody)
+		if err != nil {
+			l.DebugContext(ctx, "reading http request body", slogutil.KeyError, err)
+
+			return nil, http.StatusBadRequest
+		}
+
+		defer slogutil.CloseAndLog(ctx, l, r.Body, slog.LevelDebug)
+	default:
+		l.DebugContext(ctx, "bad http method", "method", r.Method)
+
+		return nil, http.StatusMethodNotAllowed
+	}
+
+	req = &dns.Msg{}
+	if err = req.Unpack(buf); err != nil {
+		l.DebugContext(ctx, "unpacking http msg", slogutil.KeyError, err)
+
+		return nil, http.StatusBadRequest
+	}
+
+	return req, http.StatusOK
+}
+
+// ServeHTTP is the [http.Handler] implementation that handles DoH queries.
+//
+// It returns:
+//
+//   - http.StatusNotFound if the request is not encrypted and proxy is not
+//     configured to accept unencrypted requests,
+//   - http.StatusBadRequest if there is no DNS request data,
+//   - http.StatusUnsupportedMediaType if request content type is not
+//     "application/dns-message",
+//   - http.StatusMethodNotAllowed if request method is not GET or POST.
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ctx, cancel := p.reqCtx.New(ctx)
+	defer cancel()
+
+	p.logger.DebugContext(ctx, "incoming https request", "url", r.URL)
+
+	if !p.httpConf.InsecureEnabled && r.TLS == nil {
+		statusCode := http.StatusNotFound
+		http.Error(w, http.StatusText(statusCode), statusCode)
+
+		return
+	}
+
+	raddr, prx, err := remoteAddr(r, p.logger)
+	if err != nil {
+		p.logger.DebugContext(ctx, "getting real ip", slogutil.KeyError, err)
+	}
+
+	if !p.checkBasicAuth(w, r, raddr) {
+		return
+	}
+
+	req, statusCode := newDoHReq(ctx, r, p.logger)
+	if req == nil {
+		http.Error(w, http.StatusText(statusCode), statusCode)
+
+		return
+	}
+
+	if prx.IsValid() {
+		l := p.logger.With("addr", prx)
+
+		l.DebugContext(ctx, "request came from proxy server")
+
+		if !p.trustedProxies.Contains(prx.Addr()) {
+			l.DebugContext(ctx, "proxy is not trusted, using original remote addr")
+
+			// So the address of the proxy itself is used, as the remote address
+			// parsed from headers cannot be trusted.
+			//
+			// TODO(e.burkov): Do not parse headers in this case.
+			raddr = prx
+		}
+	}
+
+	d := p.newDNSContext(ProtoHTTPS, req, raddr)
+	d.HTTPRequest = r
+	d.HTTPResponseWriter = w
+
+	err = p.handleDNSRequest(ctx, d)
+	if err != nil {
+		p.logger.DebugContext(ctx, "handling dns request", "proto", d.Proto, slogutil.KeyError, err)
+	}
+}
+
+// checkBasicAuth checks the basic authorization data, if necessary, and if the
+// data isn't valid, it writes an error.  shouldHandle is false if the request
+// has been denied.  w, r and p.httpConf must not be nil.
+func (p *Proxy) checkBasicAuth(
+	w http.ResponseWriter,
+	r *http.Request,
+	raddr netip.AddrPort,
+) (shouldHandle bool) {
+	ui := p.httpConf.Userinfo
+	if ui == nil {
+		return true
+	}
+
+	user, pass, _ := r.BasicAuth()
+	if matchesUserinfo(ui, user, pass) {
+		return true
+	}
+
+	p.logger.Error("basic auth failed", "user", user, "raddr", raddr)
+
+	h := w.Header()
+	h.Set(httphdr.WWWAuthenticate, `Basic realm="DNS", charset="UTF-8"`)
+	http.Error(w, "Authorization required", http.StatusUnauthorized)
+
+	return false
+}
+
+// matchesUserinfo returns false if user and pass don't match userinfo.
+// userinfo must not be nil.
+func matchesUserinfo(userinfo *url.Userinfo, user, pass string) (ok bool) {
+	requiredPassword, _ := userinfo.Password()
+
+	return user == userinfo.Username() && pass == requiredPassword
+}
+
+// respondHTTPS writes a response to the DoH client.  d must not be nil.
+func (p *Proxy) respondHTTPS(d *DNSContext) (err error) {
+	resp := d.Res
+	w := d.HTTPResponseWriter
+
+	if resp == nil {
+		// Indicate the response's absence via a http.StatusInternalServerError.
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+		return nil
+	}
+
+	bytes, err := resp.Pack()
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+
+		return fmt.Errorf("packing message: %w", err)
+	}
+
+	if srvHeader := p.httpConf.ServerHeader; srvHeader != "" {
+		w.Header().Set(httphdr.Server, srvHeader)
+	}
+
+	w.Header().Set(httphdr.ContentType, "application/dns-message")
+	_, err = w.Write(bytes)
+
+	return err
+}
+
+// realIPFromHdrs extracts the actual client's IP address from the first
+// suitable r's header.  It returns an error if r doesn't contain any
+// information about real client's IP address.  r must not be nil.  Current
+// headers priority is:
+//
+//  1. [httphdr.CFConnectingIP]
+//  2. [httphdr.TrueClientIP]
+//  3. [httphdr.XRealIP]
+//  4. [httphdr.XForwardedFor]
+func realIPFromHdrs(r *http.Request) (realIP netip.Addr, err error) {
+	for _, h := range []string{
+		httphdr.CFConnectingIP,
+		httphdr.TrueClientIP,
+		httphdr.XRealIP,
+	} {
+		realIP, err = netip.ParseAddr(strings.TrimSpace(r.Header.Get(h)))
+		if err == nil {
+			return realIP, nil
+		}
+	}
+
+	xff := r.Header.Get(httphdr.XForwardedFor)
+	firstComma := strings.IndexByte(xff, ',')
+	if firstComma > 0 {
+		xff = xff[:firstComma]
+	}
+
+	return netip.ParseAddr(strings.TrimSpace(xff))
+}
+
+// remoteAddr returns the real client's address and the IP address of the latest
+// proxy server if any.  r and l must not be nil.
+func remoteAddr(r *http.Request, l *slog.Logger) (addr, prx netip.AddrPort, err error) {
+	host, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.AddrPort{}, netip.AddrPort{}, err
+	}
+
+	realIP, err := realIPFromHdrs(r)
+	if err != nil {
+		l.Debug("getting ip address from http request", slogutil.KeyError, err)
+
+		return host, netip.AddrPort{}, nil
+	}
+
+	l.Debug("using ip address from http request", "addr", realIP)
+
+	// TODO(a.garipov): Add port if we can get it from headers like X-Real-Port,
+	// X-Forwarded-Port, etc.
+	addr = netip.AddrPortFrom(realIP, 0)
+
+	return addr, host, nil
+}

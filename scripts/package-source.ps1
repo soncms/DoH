@@ -45,7 +45,7 @@ foreach ($name in @('.gitattributes','go.mod','go.sum','LICENSE','NOTICE','READM
 }
 # Explicit roots omit .git, credentials, editor state, logs, local configuration,
 # agent memory, build outputs and historical local investigation reports.
-foreach ($subdir in @('assets','scripts','docs','licenses','third_party/walk','third_party/zapret2','.github/workflows')) {
+foreach ($subdir in @('assets','scripts','docs','licenses','third_party/walk','third_party/dnscrypt','third_party/dnsproxy','third_party/zapret2','.github/workflows')) {
   $dir = Join-Path $Root $subdir
   if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw "Required source directory is missing: $subdir" }
   Assert-PlainPath $dir

@@ -1,0 +1,878 @@
+{
+  "module": "github.com/AdguardTeam/dnsproxy",
+  "version": "v0.86.0",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"
+    },
+    {
+      "path": ".github/CODEOWNERS",
+      "sha256": "2bb884aff1f47778b1ff2e14fbca2bbf7778465f2f64d67b253764e1d4d61fb8"
+    },
+    {
+      "path": ".github/workflows/mirror.yaml",
+      "sha256": "477b0b544e419895e4b3703858ce0dc25cdc84c8552bd453d578de4de7c114fd"
+    },
+    {
+      "path": ".github/workflows/private.yaml",
+      "sha256": "06b52ea3378b1f20b8fe8dda52ca1c3d92fb458406f98076984f2f82a0fd7816"
+    },
+    {
+      "path": ".github/workflows/release.yaml",
+      "sha256": "37e666329975d18c29f3dd6d8b75ea0f51cc4a9cb95fbde79403e709ec5b6fc9"
+    },
+    {
+      "path": ".github/workflows/workflow.yaml",
+      "sha256": "27ee29cb69cef64d43984aeb46d81021553fd0288a182b09c11962f44970285a"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "6e559b132c73a437e14e1c61ccbf19a2b506373dab1f8d6df33f2c200ea574d5"
+    },
+    {
+      "path": ".markdownlint.json",
+      "sha256": "6df03964676488745350a838f2992f9f4cf7b6433611b0b4046cbeb0f48d3516"
+    },
+    {
+      "path": "config.dist.yaml",
+      "sha256": "06d02a77218aa150afbe961b4be39919eae54feb64ac1ce113e6899c9ccd5429"
+    },
+    {
+      "path": "dnsproxytest/dnsproxytest.go",
+      "sha256": "3e3f74802058f5a5ee83eab851361ad6a974cc1f8b5bac507bdcb5ca98918a25"
+    },
+    {
+      "path": "dnsproxytest/interface.go",
+      "sha256": "1bb16b6294cab3469be383340a619eb0b305caa9b998345c8913af5ca4a7d88b"
+    },
+    {
+      "path": "docker/build.Dockerfile",
+      "sha256": "faadb1f1cfcf5f0d097936f1a81813f9827d9550c0e39d133fdbb63ac81454e8"
+    },
+    {
+      "path": "docker/build.dockerignore",
+      "sha256": "e9e2f0cde3d058c6f7ddff95aa9884ed0524db4bc2b06376050e9a2caa1b4950"
+    },
+    {
+      "path": "docker/ci.Dockerfile",
+      "sha256": "001f786b5311d46ce1cb49cb5d314c28258695b2b3d15670606c8298fdd38bca"
+    },
+    {
+      "path": "docker/ci.Dockerfile.dockerignore",
+      "sha256": "cab828c9b2c3ca42af2a20ffbc33b0db740fe956e23b096b319bccd35570b195"
+    },
+    {
+      "path": "docker/README.md",
+      "sha256": "8e664694363ec6719a3c5ea45170d6a1d409b85c189b3d36f1a8a343db5c7285"
+    },
+    {
+      "path": "docker/release.Dockerfile",
+      "sha256": "03954a67f3d7f45f42166b9c74248267a759917e6934dbe814e2210e6d45a4b5"
+    },
+    {
+      "path": "docker/release.Dockerfile.dockerignore",
+      "sha256": "0af570701272f37df21382ff389daa0e2b33ed7739f9b11c02da7a1e58ef5228"
+    },
+    {
+      "path": "go.mod",
+      "sha256": "52a49ddf287519d93ce82b56310826df78a01b36cd5f0206bb14306f9c57c2f6"
+    },
+    {
+      "path": "go.sum",
+      "sha256": "657f0928ba81e69cec9446104ef630a240a49fa5cbff5d0817fd02f5d7a692ed"
+    },
+    {
+      "path": "internal/bootstrap/bootstrap.go",
+      "sha256": "b6ba519a9404b392f93965f793c89c34b3f75a7be00cb061dabaf7acb6050f6b"
+    },
+    {
+      "path": "internal/bootstrap/bootstrap_test.go",
+      "sha256": "1c37f34078d873d34609ce7dc412dfc5565cf75b5762f901f603436c34b7af2f"
+    },
+    {
+      "path": "internal/bootstrap/error.go",
+      "sha256": "cc82f839e589925efdebed4c49ea1b36a8a14a59fd3cf9b385a6cc2c06405bd5"
+    },
+    {
+      "path": "internal/bootstrap/resolver.go",
+      "sha256": "3e9d73ed05e2496dcfd81938c23fb462022498f4e364062aed8217c0c1916f37"
+    },
+    {
+      "path": "internal/bootstrap/resolver_test.go",
+      "sha256": "ef4b7763402abe933c0264d776a4267d9a9cfbd029b832677cd8f67972d8b60c"
+    },
+    {
+      "path": "internal/cmd/args.go",
+      "sha256": "129cb46a29931f50e55cef08e6e7da6d4199e30fd1652c7fb5a14607f1de6ba9"
+    },
+    {
+      "path": "internal/cmd/cmd.go",
+      "sha256": "d6bd56088d3ccc3b24b99e262c80e25478eb3441c6d3c25e50ea32f5b7dce0da"
+    },
+    {
+      "path": "internal/cmd/config.go",
+      "sha256": "1a637bb422a190f0295ae7c08ae86c9a15e769255addb480ebb26fd460c106ec"
+    },
+    {
+      "path": "internal/cmd/flag.go",
+      "sha256": "eaede2270dfdcbd98358d8fa8e7d3a05d1c6d19118c7c0a04650c9dafee5b3e6"
+    },
+    {
+      "path": "internal/cmd/proxy.go",
+      "sha256": "7996582c8a7f5f82c5d0fece5628f698029830c35f211e59a2cc422b8d072076"
+    },
+    {
+      "path": "internal/cmd/tls.go",
+      "sha256": "671819f5dd4eaa6a87313cc26a4b7bf788d87e89f56d83e1bfa9a3138567bed5"
+    },
+    {
+      "path": "internal/dnsmsg/constructor.go",
+      "sha256": "1adc596b7e23ca1d0ce2d2454440b7f34b88600c36268efd98805ad71b0c3718"
+    },
+    {
+      "path": "internal/dnsproxytest/dnsproxytest.go",
+      "sha256": "51a8722e4add9d32bb1d4c45184c119259b079b99f862385bf1d7ae5fac12b73"
+    },
+    {
+      "path": "internal/dnsproxytest/tls.go",
+      "sha256": "bc0da5b00e6d048adcbc201385f79adf5238cf9ea24c06f13b8e47fa226f0d89"
+    },
+    {
+      "path": "internal/fastip/cache.go",
+      "sha256": "81f2d0eac61323be4ecf36d7aaca0fdf904f2848fd415440f5cb9887f5f7744f"
+    },
+    {
+      "path": "internal/fastip/cache_internal_test.go",
+      "sha256": "4e98248dce63612e4379eec6272c6f038c536806ca353c9cc67a0fcfa8de7b3c"
+    },
+    {
+      "path": "internal/fastip/fastest.go",
+      "sha256": "55deab074576995d80e1134f05e779a9dbeb36cd2ee229b30e1b1652a5164119"
+    },
+    {
+      "path": "internal/fastip/fastest_internal_test.go",
+      "sha256": "c4d6399c7e7efd1e756dbcb32f42b95299695a5a23cfb60e404a8366d55476ed"
+    },
+    {
+      "path": "internal/fastip/fastest_test.go",
+      "sha256": "a501eed9a126cb2f81ccb89acc1115a4f3e3d2bef85c73907074f1a8607e2397"
+    },
+    {
+      "path": "internal/fastip/ping.go",
+      "sha256": "b07f248b3f769cf21ba6e71a335867b1f6e88de0782844f4b93af598ceeec594"
+    },
+    {
+      "path": "internal/fastip/ping_internal_test.go",
+      "sha256": "5b4562f12ddb2648d7a135a84c48d6d13bce91f5f6bbc1000a4b44f3da964950"
+    },
+    {
+      "path": "internal/middleware/constructor.go",
+      "sha256": "f808f1e1867d27b25b6c004c6758251377630cc8929989133e5ac4ff24cc3dfd"
+    },
+    {
+      "path": "internal/middleware/hosts.go",
+      "sha256": "bd9f2f912945814c97a3ec2f77b82923d8574c6ea420cfad696362754f7d2ef8"
+    },
+    {
+      "path": "internal/middleware/ipv6halt.go",
+      "sha256": "04f1f96aa0bfe9254beca30fca18c7e58feaa9f296bd5f4018fb81bb54662695"
+    },
+    {
+      "path": "internal/middleware/middleware.go",
+      "sha256": "4ddee92d8b0e45f62df0ab6bd6c562ae7e81e026c492eaf09f45bea03b40e363"
+    },
+    {
+      "path": "internal/middleware/middleware_internal_test.go",
+      "sha256": "4f328c24b61adda1ce18e372cf9852b5675745a37d250b496e6f52c863e1874e"
+    },
+    {
+      "path": "internal/middleware/testdata/TestDefault_resolveFromHosts/hosts",
+      "sha256": "69f0edd867a70970979e7816b663d4b0cb3b008a60784f4fc5b1d8e0aa3ee9f8"
+    },
+    {
+      "path": "internal/nettest/nettest.go",
+      "sha256": "0c18194c73ff1ea6983e45762343b09c4609ff536c5e87a6b287652c08690a13"
+    },
+    {
+      "path": "internal/netutil/listenconfig.go",
+      "sha256": "0b8643fd7f46f8dee60802cc66274021426a7cef515528e951324e01b09c770c"
+    },
+    {
+      "path": "internal/netutil/listenconfig_unix.go",
+      "sha256": "0c1914965e37486312b478253bf79d20ee2b4b9d69ac44c2c73fe69f74eca609"
+    },
+    {
+      "path": "internal/netutil/listenconfig_windows.go",
+      "sha256": "7ffdfd36b1076fbf5951992b00e1c1cf1a7ca5c4cd3cfe2b63f6fbf0db9992f6"
+    },
+    {
+      "path": "internal/netutil/netutil.go",
+      "sha256": "e1e85fa55357da28409563ce95fe422a08d13881093bd3987b0a88cc73bc1a4c"
+    },
+    {
+      "path": "internal/netutil/paths.go",
+      "sha256": "264b1c448cb26a535b2a8d120095c1fc229a390d0228845e1cba90b0a1e1ff5e"
+    },
+    {
+      "path": "internal/netutil/paths_unix.go",
+      "sha256": "24cf8276972ccdaf3013b1492b5d6e2cdca1ae283a79296aec0f044ec6e9162c"
+    },
+    {
+      "path": "internal/netutil/paths_windows.go",
+      "sha256": "1c4babba9d13e691ce9438e0555d1a7322968a8cf1da7705f7e0a5b57830ea98"
+    },
+    {
+      "path": "internal/netutil/testdata/TestHosts/bad_file/hosts",
+      "sha256": "7ca8a3867cdaedf8bba2bf5bc0ea6931e8d8a45e01f2518f6ad8c7652188a6e8"
+    },
+    {
+      "path": "internal/netutil/testdata/TestHosts/good_file/hosts",
+      "sha256": "1e3451676e0d1560528bdaa5927bf312a06d25ef56af45b15f639f6f2eb5232b"
+    },
+    {
+      "path": "internal/netutil/udp.go",
+      "sha256": "9799dabd55a9118a186fbd0785745eefc2bbdd11c2741923067d0bdd1cd7587d"
+    },
+    {
+      "path": "internal/netutil/udp_unix.go",
+      "sha256": "ce35874c9f46ea31c93751dd477b47736bbff66b941d0cad3563550bf531dccf"
+    },
+    {
+      "path": "internal/netutil/udp_windows.go",
+      "sha256": "9d08b08d031fe4d6d679e43ec84d86caf7e1d973b3aa9d5dcdcd58ff5251679d"
+    },
+    {
+      "path": "internal/netutil/udpoob_darwin.go",
+      "sha256": "a7772d28c3e383c883bd1143d456b930e9c52c40e020e0d02a2bd057795ee0ca"
+    },
+    {
+      "path": "internal/netutil/udpoob_others.go",
+      "sha256": "5e069b6165a4b505beda8fd940690cf7862f9d665236dc70c4e504e4270a7889"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "e2668ac346b320bf49452c23c9a59915bd9ebb3e6123f02fe83604dc18cafccf"
+    },
+    {
+      "path": "main.go",
+      "sha256": "2a71d5799d43ef97ce145177986fb80be1dd172bccfc7e5783d6ae0063e11bca"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "04d833b94fa703cff1059bfaeb827c33c6e9b66ebf7e43ad4849624ddcdf6276"
+    },
+    {
+      "path": "proxy/bogusnxdomain.go",
+      "sha256": "9b930608c91c3a0b05f3f8d951eee1fea20ed6e63ccdc607e9eed9b04d013a30"
+    },
+    {
+      "path": "proxy/bogusnxdomain_internal_test.go",
+      "sha256": "4e955ba55559a66ecd7e8a456434fea1e2703b16ccbc20b96bd784c1adf1357e"
+    },
+    {
+      "path": "proxy/cache.go",
+      "sha256": "9c964ba139f8cbe89aac063e87816a0bd1f4f77b9f66e4e83f863045e477aeca"
+    },
+    {
+      "path": "proxy/cache_internal_test.go",
+      "sha256": "57b6eceb6af71751abb043c624886b5a0c28df538f33f9bc068127d1366062ea"
+    },
+    {
+      "path": "proxy/config.go",
+      "sha256": "6a98be13e4d18f2a1151f0be6bcdc8306d397591bdbaf0406150f9c0b4acef23"
+    },
+    {
+      "path": "proxy/constructor.go",
+      "sha256": "d51d5175c0495916aa9d60ca2a8b53cdc1c16c8142093b14c196454454e9738f"
+    },
+    {
+      "path": "proxy/dns64.go",
+      "sha256": "fb8a573e3cf8b2ac619d88a19c8605288da2ef68b2bdad1361675820f55305d0"
+    },
+    {
+      "path": "proxy/dns64_internal_test.go",
+      "sha256": "de62ef5db7320a8625fa35afc4784d0f0030f22eb4a7af14ba27b933a5e14327"
+    },
+    {
+      "path": "proxy/dnscontext.go",
+      "sha256": "887f8350fe0ebf93e99741171c9172cab3dd927c29829c691c5e2c4f9c179145"
+    },
+    {
+      "path": "proxy/errors.go",
+      "sha256": "1f1507b7abfa578aa84a8e330ae222ffb27b310940fb0f94a5093163b504288b"
+    },
+    {
+      "path": "proxy/errors_internal_test.go",
+      "sha256": "8bc1e14e414c8b01605439f08d2bb8a5df54e17e964f72418ccf1fe00887a8a4"
+    },
+    {
+      "path": "proxy/errors_plan9.go",
+      "sha256": "c0b5dffc39e150cbca6c72143b0223c795098fb1837e0a05b68911472268a08e"
+    },
+    {
+      "path": "proxy/exchange.go",
+      "sha256": "378dcc634e81cdbd2940e0a3dfc39bcd632a9ceada78b976e16af7419ad71baf"
+    },
+    {
+      "path": "proxy/exchange_internal_test.go",
+      "sha256": "61ebc6b6968fc3f68baffb5054883f45e0b4bff64fbd061e00689615b997d4ce"
+    },
+    {
+      "path": "proxy/handler_internal_test.go",
+      "sha256": "8eb9e8895acf8e72d21b65721515919c164a8e1ebe4fc124ba500a8a5153fb91"
+    },
+    {
+      "path": "proxy/helpers.go",
+      "sha256": "c683cdaff6a05958ceae54adb2a114e679d2cf19853b8ca5ca998675d3d574ba"
+    },
+    {
+      "path": "proxy/lookup.go",
+      "sha256": "b725252956bbf45cf83117ed04276e09c6681051567242a8a315302a94b4c11c"
+    },
+    {
+      "path": "proxy/lookup_internal_test.go",
+      "sha256": "5412cef18a7e857bf7bf671038b2ceedd9a2f70674a26daa201207dd423d1605"
+    },
+    {
+      "path": "proxy/middleware.go",
+      "sha256": "2941dc2908acec53a1eb28922d94d7e7da298dfbc621d501a62a77d794ed59a6"
+    },
+    {
+      "path": "proxy/optimisticresolver.go",
+      "sha256": "948f484a5fdf0ba71062e9c4fa0ff76f6ae7c39a3d0a836dac0b81362b35a9eb"
+    },
+    {
+      "path": "proxy/optimisticresolver_internal_test.go",
+      "sha256": "903b44de4056b043de8548e9956d771ec14815628b1ff23326d8df25b98cc616"
+    },
+    {
+      "path": "proxy/pending.go",
+      "sha256": "3881e8447b66f3322888ee8dffb252cb01d5b9ed59680a3641a8e2650de73312"
+    },
+    {
+      "path": "proxy/pending_test.go",
+      "sha256": "1a2931e931e4404a355a13be634d7645fb3c6a967fff9b900c670b9a7ed68816"
+    },
+    {
+      "path": "proxy/proxy.go",
+      "sha256": "76ab4f9c2ea9de74ae4c6e21f514a8c1c4c1acc33b5c344d464c5341880b04ba"
+    },
+    {
+      "path": "proxy/proxy_darwin_test.go",
+      "sha256": "e175976743d19613fecb86c106dbf78dec015993991ac14f4b59058af6de531c"
+    },
+    {
+      "path": "proxy/proxy_internal_test.go",
+      "sha256": "7371c40be894b29ace71994fd57777a9ac918971d7f20e6766718f66eb5c0c49"
+    },
+    {
+      "path": "proxy/proxy_other_test.go",
+      "sha256": "7ac1b055d277bdc2fd018a1873d8de592ea7f667118cfc1f48503fee3d079ca9"
+    },
+    {
+      "path": "proxy/proxy_test.go",
+      "sha256": "55a0e0731e902179f67b1ee55080313e8b6bf6a91a8cc5db22ee5feb0de18fcf"
+    },
+    {
+      "path": "proxy/proxycache.go",
+      "sha256": "ffa0c02d599702bbd81f3392bee516276bf4e8088d068645f04d1d2d9c38566d"
+    },
+    {
+      "path": "proxy/recursiondetector.go",
+      "sha256": "14d5907d93cdc11e8d39cc80403d93332ad61d7b5d417668639dde024f87bdf6"
+    },
+    {
+      "path": "proxy/recursiondetector_internal_test.go",
+      "sha256": "f80be91c8ae4a64234ec98be67863fa209bd88ea186212251a29ae67f491cbd7"
+    },
+    {
+      "path": "proxy/requesthandler.go",
+      "sha256": "f373ff86d33392fb7d51238453de1203e847872e3ef63f1ff45dfc04fee3f3f0"
+    },
+    {
+      "path": "proxy/retry.go",
+      "sha256": "d7e1f2ad2ae43c715f1674a2bb0bfee3c779dfa032478d232e6d2489cc5ae1d5"
+    },
+    {
+      "path": "proxy/retry_internal_test.go",
+      "sha256": "d7f0e84c710c5c69e1fc9e7d2be4330e13fc011b4712a645b1c220787a58c648"
+    },
+    {
+      "path": "proxy/route.go",
+      "sha256": "8721efa87f2a9432670fca93c1d7d5d608537e3aab95b96ba042c2be08d79f78"
+    },
+    {
+      "path": "proxy/server.go",
+      "sha256": "1935551cd41f76155f1c03cb1876bded4bde5c10e1e01473c3ab3c33bbc81d6f"
+    },
+    {
+      "path": "proxy/serverdnscrypt.go",
+      "sha256": "bc1c903017f96e7437247ed38609c766cd756821e26715d9d58c7bbd9a32cb45"
+    },
+    {
+      "path": "proxy/serverdnscrypt_internal_test.go",
+      "sha256": "d6df81fd75e28a3b7d221efe15654fe0b4525d7340dac247e52f05bb7f51f4bd"
+    },
+    {
+      "path": "proxy/serverhttps.go",
+      "sha256": "9d096470868723bbf9977cde2ff7d7597035c7ece0d8c706ab0792aa3dc36961"
+    },
+    {
+      "path": "proxy/serverhttps_internal_test.go",
+      "sha256": "6d3a113c67a562a7dd54421ac4a26d1956cad272fde5bfb9895101f71028254c"
+    },
+    {
+      "path": "proxy/serverhttps_test.go",
+      "sha256": "8b1f639f5a196398582cfac91bbdc04e2569a1a1819d5bb1205ff57a706940f9"
+    },
+    {
+      "path": "proxy/serverquic.go",
+      "sha256": "7b2a2d6d57eac81210a53f739fc976af674c54d2157d809b86d32fc4352a98ff"
+    },
+    {
+      "path": "proxy/serverquic_internal_test.go",
+      "sha256": "8d0bdc443a21c1bc5d43d2068eabf525241d88a50ebfeed2102ab43de66f152a"
+    },
+    {
+      "path": "proxy/serverquic_test.go",
+      "sha256": "1b53389d918ff3f73984e8e6b9cb62e3dbfca772bdb95694a799a0265ca68643"
+    },
+    {
+      "path": "proxy/servertcp.go",
+      "sha256": "2c1600f3219d1a41b8331645f22923b615fcddfef57309e01ea678b199fb3dde"
+    },
+    {
+      "path": "proxy/servertcp_test.go",
+      "sha256": "048f7e8c40e1d56c08c0301eac9076def5c46afa2c3480f93815dbae42c06333"
+    },
+    {
+      "path": "proxy/serverudp.go",
+      "sha256": "1e899a86bd7f5fb133c39cfe7d76b8ed6dd59b41d4e2fcef152a64f27ff6b7ca"
+    },
+    {
+      "path": "proxy/serverudp_test.go",
+      "sha256": "229180ac578f24378d597ef30560cce6136f953a67befb0066528dcec5329a3b"
+    },
+    {
+      "path": "proxy/stats.go",
+      "sha256": "2a90f1748d860f2ba141d564d56fdeb08a86136d54acc0e460284bb0e455f1f4"
+    },
+    {
+      "path": "proxy/stats_test.go",
+      "sha256": "9c008cdbdf652876c52e3c46dc10dcceb90badff32e667f9f9b38d15960ad74c"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/chain_option_with_code_8.bin",
+      "sha256": "c1757cb715687289c697fb4b20b9291614260de0074a625acb53ea73ce52773d"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/circular_compression_reference_chain_variant_4.bin",
+      "sha256": "3e6e456defbceb38713b15afb948464c7db04cb4a41a7d2b20a408a4e0cba94d"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/client_subnet_option_ecs_with_private_ip_but_querying_public_dns.bin",
+      "sha256": "1a753a30507521e641e641b724bc92244d9f2dcf696078ed9bf188e33366de15"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_chain_spanning_all_sections.bin",
+      "sha256": "a5a5eb4e1b6627d636aff0ba7acf4090f293e4a713962f178fd6c77fa2424282"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_pointer_chain_depth_200.bin",
+      "sha256": "1cb51c3a5b7d0af7cc679aa97049ffd93de728ce3838db61e830e42d41705e43"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_pointer_in_authority_section_pointing_to_additional_section.bin",
+      "sha256": "d130438cbb0dff6a3277319228fad0cbc20b3ff29a4ccffa066e382eb00864bb"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_pointer_offset_aligned_to_odd_boundary.bin",
+      "sha256": "dd91a681f47ff9b89a2abfa3566579b241cdc118f81a358e71a2086c20217834"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_pointer_with_offset_16382_max_valid_14_bit_value.bin",
+      "sha256": "ab41cf8bb7187bbe140b945f29c4f7c01acad0120405de4ecf494737b9aa07d3"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/compression_pointer_with_offset_using_only_lower_14_bits.bin",
+      "sha256": "1a56f16bf2a877a8566ef1560ce6f31179129dc5e96e3813778186b63d2ec633"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/cookie_option_with_code_11.bin",
+      "sha256": "16fe74f8de8239fc4dd258f555b6b38bb035c2d96b185a485d422f31cb991b8d"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/dau_option_with_code_8_instead_of_5.bin",
+      "sha256": "6ad8b96a57d6e950a56289c8d22a81c6cc6abcf5446d15cf75158916436bbae4"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/dhu_option_with_code_8.bin",
+      "sha256": "fc3a9e08e3bffd78d71af66b28fc351c6685db24fba0aee4502daebbf65895c2"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ecs_option_with_code_11.bin",
+      "sha256": "e169b96475ac95aafa94e4631ba4850fde38051a5c27160f54b586c4b0b55f3f"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ecs_option_with_scope_prefix_length_non_zero_in_query.bin",
+      "sha256": "740c8fd3e1b33f9cf9f865a519ef5b6f5dc137d63ea1b273b8ad3ac5a8bbc61e"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ecs_option_with_unsupported_address_family.bin",
+      "sha256": "c6a1a3c981a368f87963d2ebb171527089e509552d9430f55356ca4294f01e42"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ecs_query_with_scope_prefix_length_11.bin",
+      "sha256": "41ddf3bef13f3a294ca9c48c661796a18a87e05c5111c0b902b936615d0c28d0"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ecs_source_prefix_length_exceeds_ip_address_bits.bin",
+      "sha256": "feba966cb956f632e6fedc0e9e6b54718a3f6cdde5d1e6844510724e3b09377a"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/ede_option_with_code_8.bin",
+      "sha256": "3dc66cac2ed89ea5284915a45e80bbf10865d37b17691b320b71b3cf7d8a80a1"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_dau_dhu_n3u_options_with_not_matching_list_length.bin",
+      "sha256": "b74e2a14d893a73bcee03de5608e6cf6c565dba4dda64370b5977761ce3a6ff7"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_ecs_with_ipv4_source_prefix_length_excess.bin",
+      "sha256": "2b05953d8cb68e354939128899439854164da4367b70db75d68208a311e5d47f"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_ecs_with_ipv6_source_prefix_length_excess.bin",
+      "sha256": "1362d7284899e7092bde66408e7d310709cd0fb0adbab1eaa92f197761f2302e"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_ecs_with_source_prefix_length_0_no_client_subnet_info.bin",
+      "sha256": "3c5effb1aa5d0891964c10e2995566d7c5cb872db8bd55e984b1df24e7148e36"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_option_chain_with_backward_option_code_ordering.bin",
+      "sha256": "0bef64fef73907345889caf25ad64a3ff53c62a323a45550e2d475780c0c86a5"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_option_with_code_gaps_missing_odd_codes.bin",
+      "sha256": "a278fbb739010c2d4cbb2044c1799cc2357e940f24aaa22e9235b14e209593ac"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_option_with_option_length_0_but_option_data_present.bin",
+      "sha256": "a8946f76f764e49ef4d12683bcae7163f3cfed699205875419144025a397b80e"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_option_with_option_length_claiming_100_bytes_but_only_10_present.bin",
+      "sha256": "9c4dd4eafbe74ca8bdf27097420b9d80b626437f60b697eef3e546d5f9160a28"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_options_list_with_gap_option_1_and_option_3_missing_option_2.bin",
+      "sha256": "6bc2f7d92ae47586773ab95fd144b9324507e3278f9281ef1e9488f59442f778"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_options_with_duplicate_codes.bin",
+      "sha256": "cabc220a922e24007b8d4431d4b4ef4a372a715cac3f3cc08f31334b1c9de3be"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_options_with_total_length_exceeding_rdlen.bin",
+      "sha256": "4c95a7ecc544314b5ac88e0dd4917bfaf6a2fa0f6e0c6f88eacab0e91bbaefd5"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_padding_option_at_the_beginning.bin",
+      "sha256": "192423a28d420eca7d4321e9bfb8c5ac85b07b8b26ed6c38a374c4d81f29d037"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_padding_with_non_zero_bytes_should_be_zero_padding.bin",
+      "sha256": "4ab60276389a5fd28b805f265a027f1daf962dbcd37d78c04d0d5615a160b31c"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/edns_version_19.bin",
+      "sha256": "52f989dd8fa0639f5d6a7d95cc8e605e7c4c3022baf433a1c6b25ad261e39973"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/expire_option_with_code_11.bin",
+      "sha256": "f8e8c9c8cd9466af41bade563feaeb669fa974293cc779d7b57d54320bfe43fb"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/expire_query_with_option_length_1.bin",
+      "sha256": "d6bb95d8e3eb3e1f1542cefb893c19c741b04864208a7dc275188e2563173e32"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/internal_query_with_ecs_indicating_external_client_subnet.bin",
+      "sha256": "f7094fcfb05b268216b8028bf7bd6e7174c4f98dba49589ea4823cfc68be8e1b"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/key_tag_option_with_code_8.bin",
+      "sha256": "2346218a3b919febe57bcd919605682a1648c73ab858e0270e9b70c959371ce8"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/n3u_option_with_code_8.bin",
+      "sha256": "df12bd6cca6bcbbf33f96e9a8d57d57257373b59bbf0cf5afc95b9b954e0c427"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/opt_rr_name_containing_invalid_label_length.bin",
+      "sha256": "eb327c58193606f0aa14c28f3069c638ebed6f53ba7ec7231119e8374e43678d"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/opt_rr_with_name_set_to_label_sequence_variant_9.bin",
+      "sha256": "8bc0b70f3012f1bc1dbf211970abfaa5b5a9ed6e1d20dbe7a756ec453f7850cb"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/padding_option_with_code_11.bin",
+      "sha256": "c95767c15fd9fd06b31b1bffb64e7bca1c097d75f617df907a3247724a85e04b"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_designed_to_fragment_at_compression_pointer_boundary.bin",
+      "sha256": "59a043ce7e9fc24b54eb5dfc42820bb9fbf9bf6c9b2c60ad8ffed79fde09cfb1"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_for_dnssec_chain_validation_but_cd_1_disables_chain_checking.bin",
+      "sha256": "8b424fc9e108a8369f9a899b1dbbb6fe55b3b41ef3a83057f7d52142fd9e9974"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_ecs_indicating_internal_subnet_from_external_source.bin",
+      "sha256": "551a3e92b75a93202e048232ada0cae166aba402f24b649b307cb46773dda5e7"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_edns_option_extending_beyond_rdlen_boundary.bin",
+      "sha256": "7d53ad3262a44597f3a84a8d4d0e711c9feab07d8fa67ae9a85fab49b6a0ac6a"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_edns_option_length_extending_beyond_packet.bin",
+      "sha256": "d11df79f7fa23da2df5cf125e80ceb7ddaa1dc75e3565468ede8021fca093140"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_multiple_edns_options_each_claiming_large_lengths.bin",
+      "sha256": "c3f3b449d2c5a0ad7e8e78cf9fecaa91b6f0c8148410f7ae3601129d0dbf7518"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_rdata_truncated.bin",
+      "sha256": "9ac25f0ce1bb20eac5dbbc155941d74dc6080cbea0d11cd57d8c134d3fb6db48"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/query_with_version_255_and_all_edns_options_present.bin",
+      "sha256": "fa149f8373147add6b7b80ee07ec7b8339c85d33b56c599adfa91b6461e8d0b2"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/rdlen_10_actual_options_length_6.bin",
+      "sha256": "d546cbc659d0c917c358523f62fd5fca5b2cb3f12f5abe33fd0a984d395d2433"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/rdlength_in_opt_rr_set_to_max_uint16.bin",
+      "sha256": "72cf5e2ff90c68e8a234f6bd301664b8e5d6fbb795140b2b1928bb0981bf7b57"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/rr_name_with_compression_pointer_offset_exceeding_message.bin",
+      "sha256": "842c40aa6306d396f13a69add2ea710f71c171bd01475219cc97fe3b5669a16a"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/tcp_keepalive_option_with_code_8.bin",
+      "sha256": "023278971718db17fe0ab628f900c008dcc68436505fd949848c00c1a760a1bc"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/tcp_query_with_data_beyond_declared_length_prefix.bin",
+      "sha256": "df62d3df69c560d9565f8b260a6db0726c83f7d8ec798d339030c3aa5926d8ee"
+    },
+    {
+      "path": "proxy/testdata/TestProxy_ServeDNS_formatError/udp_payload_size_64_rdlength_claims_1000_bytes.bin",
+      "sha256": "de4b646e6c6708f787bc953be88ae47f1731d469a69192ba115d296af1fe333b"
+    },
+    {
+      "path": "proxy/upstreammode.go",
+      "sha256": "8970f031d9ca6aec49c9158e82de8520a0672ba02171b4b066838845b275186d"
+    },
+    {
+      "path": "proxy/upstreammode_test.go",
+      "sha256": "263c3528f47fba18e2a282f1980b6d4bf1faae88871270701e0ff887f33dc0fc"
+    },
+    {
+      "path": "proxy/upstreams.go",
+      "sha256": "e0ce0796bbee22a38e52769baddf4181e73df9a4e8b2d1998045aa00d9e10371"
+    },
+    {
+      "path": "proxy/upstreams_internal_test.go",
+      "sha256": "326cb831c2abadeea8dacb6a71d56524e41f8f2378844358b951079867ec7da9"
+    },
+    {
+      "path": "proxy/upstreams_test.go",
+      "sha256": "a6c9171141cdc9cc4d3d1f84a6ca7bb3fb2f8df9849092710ca3de1413c47ce2"
+    },
+    {
+      "path": "proxyutil/dns.go",
+      "sha256": "b7e9beecdb1ef8714b111e673e2db1ebafcf86e7531e51b9e95108b4456ac6b1"
+    },
+    {
+      "path": "ratelimit/config.go",
+      "sha256": "540f5997ceb76d05acb119c527e96513f8ce6fdb83dbc884103cbadf3cd84f7a"
+    },
+    {
+      "path": "ratelimit/ratelimit.go",
+      "sha256": "419e6e2810ebd49cbb8e7a2ab0c439ed866755e9fd4992753acbc648316fb087"
+    },
+    {
+      "path": "ratelimit/ratelimit_test.go",
+      "sha256": "c9755dac6772a9dc07294f85b350bc07f63b0958576b26bb99858681580afe87"
+    },
+    {
+      "path": "README.md",
+      "sha256": "7e1c856d306260fd137e3ac7a14186d78908f29ace0d7ff6b1d55420eb41cd37"
+    },
+    {
+      "path": "scripts/hooks/helper.sh",
+      "sha256": "737ca3bcbaab30ec3f2300ce5aeb870b7959616b4c58956e7cd90ebd4e212e76"
+    },
+    {
+      "path": "scripts/hooks/pre-commit",
+      "sha256": "9459e7bc54c8194c384c8135c66b6533c7277fc5633d477bc53091f66a53be3e"
+    },
+    {
+      "path": "scripts/hooks/pre-merge-commit",
+      "sha256": "e64482327c3722cbec8297dd8f1930a58d433630f6449fd9813dbce3f6173ca4"
+    },
+    {
+      "path": "scripts/make/build-docker.sh",
+      "sha256": "1fe56d09fad93384d988a6a231403dff9820291af1486362f619259650f4ae4e"
+    },
+    {
+      "path": "scripts/make/build-release.sh",
+      "sha256": "23c59e898f443297b2eb813463355d1a77ecc5d01b6d9c3c42937dd70641dff1"
+    },
+    {
+      "path": "scripts/make/go-bench.sh",
+      "sha256": "f1a65951fb951782740926c803f7d941ad5b10ea0ba899e3c95ed6b410b6115d"
+    },
+    {
+      "path": "scripts/make/go-build.sh",
+      "sha256": "c0de1e48c4112dfe568f5cfe22044dbbfcf6f993054a5c5e8879254e3852183d"
+    },
+    {
+      "path": "scripts/make/go-deps.sh",
+      "sha256": "5507526e5c1b840ead5fd831f73798e09cfa4a1bf01f65e44689f8239127645a"
+    },
+    {
+      "path": "scripts/make/go-lint.sh",
+      "sha256": "34f858a18a7c778e1d005e9bb1f1c46dd3943f2dd6ea110979766dcbf2532fcd"
+    },
+    {
+      "path": "scripts/make/go-test.sh",
+      "sha256": "8bdd0378b1768bfceec23d0c243c4b08614e6f1e708a1d198f5408d6c13a21bb"
+    },
+    {
+      "path": "scripts/make/go-upd-tools.sh",
+      "sha256": "a13110deca21f5ccb8ab71635eaf4d34ad4e5101df1cf7f3394440e1a2f87410"
+    },
+    {
+      "path": "scripts/make/helper.sh",
+      "sha256": "06f7caf130a5b9f6bfb78ae4f5a53bb1bf991ca3a6dd3f4a66512f76fc7d6db0"
+    },
+    {
+      "path": "scripts/make/md-lint.sh",
+      "sha256": "d7fbf15bf728f95f93cfe82cbed8c8c84e6060036de5fd2f397557965dff2c82"
+    },
+    {
+      "path": "scripts/make/sh-lint.sh",
+      "sha256": "11da537c656a17c9f1349c7b375307dea608bbf26c9c91bd4cf9038df2e446af"
+    },
+    {
+      "path": "scripts/make/txt-lint.sh",
+      "sha256": "10971c9c5a60299fa034d819be322d1a591d90f01c2b70c3a7c46c0c433b4e3b"
+    },
+    {
+      "path": "scripts/make/version.sh",
+      "sha256": "81bb6e00cd5998ff37c11c85f0cf9146cb75dc158ce0598442bc47c283f29d82"
+    },
+    {
+      "path": "staticcheck.conf",
+      "sha256": "f092ae015d44d4f6bef5042eccc9a007e69b2a3432b416a6c64d4ed870e86846"
+    },
+    {
+      "path": "upstream/dnscrypt.go",
+      "sha256": "5663e558d89a6fa2846508c825bf6a073cb74f3b523baaca85b3b2e1a285cfe8"
+    },
+    {
+      "path": "upstream/dnscrypt_internal_test.go",
+      "sha256": "7b9147292a375d911cff118b3dd10553852032e59de0622d82b9e109ed60c54f"
+    },
+    {
+      "path": "upstream/doh.go",
+      "sha256": "e375da9cac8170f67718eb4797dec1cdbd0d70973bc84a511b69040b0b00f0e8"
+    },
+    {
+      "path": "upstream/doh_internal_test.go",
+      "sha256": "aed8e72f1d7963b35e06b7fe6eb4c7a7aa0f3f755577943cd960d34c0aa272fd"
+    },
+    {
+      "path": "upstream/doq.go",
+      "sha256": "fcb858076cc22696ea7b603afd738ff4d95e3e103f6fe1aae4f52e6d4985ea61"
+    },
+    {
+      "path": "upstream/doq_internal_test.go",
+      "sha256": "37dea3b091b9eb5e68e8c30a97140f1c24ebe163ec181e9b74d45b62c6d3fea2"
+    },
+    {
+      "path": "upstream/dot.go",
+      "sha256": "3a0d48d96324ff10ed120151439cf923f907af2cd62a626c737487a6e4b0bc51"
+    },
+    {
+      "path": "upstream/dot_internal_test.go",
+      "sha256": "94e8e58dfd3bede73f0923712ad7e2b55fbe86cc847d157742cb0a74bb2abb58"
+    },
+    {
+      "path": "upstream/dot_unix.go",
+      "sha256": "53c9b34246f30d8b15bf9f4336759fdc506467a04557d10ecd48d62ba2eb472b"
+    },
+    {
+      "path": "upstream/dot_windows.go",
+      "sha256": "33c5da5d452fe8a60e4d899ba3b7afa007328fff5cd0897d5e8197ab61fba99d"
+    },
+    {
+      "path": "upstream/hostsresolver.go",
+      "sha256": "0d749c5291297e4ad6680ca0a32aac695f7e04ebe2d4e2f486d605417a4209ab"
+    },
+    {
+      "path": "upstream/hostsresolver_test.go",
+      "sha256": "db028acf6ba485d6e815dbc16ea71ab4fb9b945e95fd9fcbaffcd3b91659d3f9"
+    },
+    {
+      "path": "upstream/parallel.go",
+      "sha256": "858bf2f81c27bd3fa18d66d93aa5754b6c222b2b789f96fa10ec424f000d3f11"
+    },
+    {
+      "path": "upstream/parallel_internal_test.go",
+      "sha256": "7cbe5d31dc720511ade190396fafc727baaadba3bd7d6d25dcf2762dd99708c7"
+    },
+    {
+      "path": "upstream/plain.go",
+      "sha256": "37b8cac065268e4cb24de641bedf3d8e13ab5d7bba335c50f2c77cd865177db0"
+    },
+    {
+      "path": "upstream/plain_internal_test.go",
+      "sha256": "e4af555660d2a1a36c5d6442a0f1df1e0a1addff4b16f5f20f77bef9cfb181d4"
+    },
+    {
+      "path": "upstream/resolver.go",
+      "sha256": "eec0c33b973cb861996874a50838d84b96a5bf0be1c1403ce402aa30490dc578"
+    },
+    {
+      "path": "upstream/resolver_internal_test.go",
+      "sha256": "57712643c9ad37efce949dc8da347f9c4af950e105d05f1375a547004e37d82f"
+    },
+    {
+      "path": "upstream/resolver_test.go",
+      "sha256": "26cea09edd5f9e700645a07839079a478706322b2318106e6e8e0895c8c2d7a6"
+    },
+    {
+      "path": "upstream/upstream.go",
+      "sha256": "62713c7b2a15f6205efe166de9a99520c5a8627714d6c2b5a01e2b7c9a98efe5"
+    },
+    {
+      "path": "upstream/upstream_internal_test.go",
+      "sha256": "dc480ea6454a7f19a26a135a9d1a3ec16f0c535b0125d638e145c85f5b8b44f1"
+    },
+    {
+      "path": "upstream/upstream_test.go",
+      "sha256": "e573058f7f56b49519b7fddfc2f8081c88f1d443529303b62a161fb4841cab09"
+    }
+  ]
+}

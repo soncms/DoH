@@ -438,6 +438,9 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Count(string(runtimeLog), "dpi: windivert initialized. capture is started.") < 2 {
+		t.Fatal("both embedded DPI launches must report initialized WinDivert capture")
+	}
 	for _, issue := range []string{
 		"WinDivert shutdown failed", "cancel WinDivert I/O", "close WinDivert handle",
 		"WinDivert shutdown wait timed out", "WinDivert cleanup incomplete",

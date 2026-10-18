@@ -29,6 +29,18 @@ func startLocalEncryptedDNSFixture(t *testing.T) (stamp string, calls *atomic.In
 // It runs after decryption, so arrival proves the request reached this upstream.
 func startLocalEncryptedDNSFixtureWithGate(t *testing.T, beforeReply func(context.Context, *dns.Msg) error) (stamp string, calls *atomic.Int64) {
 	t.Helper()
+	return startLocalEncryptedDNSFixtureWithHandler(t, dnscrypt.HandlerFunc(func(ctx context.Context, w dnscrypt.ResponseWriter, q *dns.Msg) error {
+		if beforeReply != nil {
+			if err := beforeReply(ctx, q); err != nil {
+				return err
+			}
+		}
+		return w.WriteMsg(ctx, encryptedFixtureReply(q))
+	}))
+}
+
+func startLocalEncryptedDNSFixtureWithHandler(t *testing.T, reply dnscrypt.Handler) (stamp string, calls *atomic.Int64) {
+	t.Helper()
 	rc, err := dnscrypt.GenerateResolverConfig("sondns-fixture.invalid", nil, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -40,12 +52,7 @@ func startLocalEncryptedDNSFixtureWithGate(t *testing.T, beforeReply func(contex
 	calls = new(atomic.Int64)
 	handler := dnscrypt.HandlerFunc(func(ctx context.Context, w dnscrypt.ResponseWriter, q *dns.Msg) error {
 		calls.Add(1)
-		if beforeReply != nil {
-			if err := beforeReply(ctx, q); err != nil {
-				return err
-			}
-		}
-		return w.WriteMsg(ctx, encryptedFixtureReply(q))
+		return reply.ServeDNS(ctx, w, q)
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	shutdown := func(servers []*dnscrypt.Server) {

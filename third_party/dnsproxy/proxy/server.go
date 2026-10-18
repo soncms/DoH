@@ -1,0 +1,252 @@
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+
+	"github.com/AdguardTeam/golibs/container"
+	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/logutil/optslog"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/miekg/dns"
+	"github.com/quic-go/quic-go"
+)
+
+// startListeners configures listeners and starts listening each configured
+// address.  If it returns an error, all listeners should be closed manually.
+func (p *Proxy) startListeners(ctx context.Context) (err error) {
+	err = p.initUDPListeners(ctx)
+	if err != nil {
+		// Don't wrap the error since it's informative enough as is.
+		return err
+	}
+
+	err = p.initTCPListeners(ctx)
+	if err != nil {
+		// Don't wrap the error since it's informative enough as is.
+		return err
+	}
+
+	err = p.initTLSListeners(ctx)
+	if err != nil {
+		// Don't wrap the error since it's informative enough as is.
+		return err
+	}
+
+	err = p.initHTTPSListeners(ctx)
+	if err != nil {
+		// Don't wrap the error since it's informative enough as is.
+		return err
+	}
+
+	err = p.initQUICListeners(ctx)
+	if err != nil {
+		// Don't wrap the error since it's informative enough as is.
+		return err
+	}
+
+	return nil
+}
+
+// serveListeners starts serving the configured listeners.
+func (p *Proxy) serveListeners(ctx context.Context) {
+	for _, l := range p.udpListen {
+		go p.udpPacketLoop(ctx, l, p.requestsSema)
+	}
+
+	for _, l := range p.tcpListen {
+		go p.tcpPacketLoop(ctx, l, ProtoTCP, p.requestsSema)
+	}
+
+	for _, l := range p.tlsListen {
+		go p.tcpPacketLoop(ctx, l, ProtoTLS, p.requestsSema)
+	}
+
+	for _, l := range p.httpsListen {
+		go func(l net.Listener) { _ = p.httpsServer.Serve(l) }(l)
+	}
+
+	for _, l := range p.h3Listen {
+		go func(l *quic.EarlyListener) { _ = p.h3Server.ServeListener(l) }(l)
+	}
+
+	for _, l := range p.quicListen {
+		go p.quicPacketLoop(ctx, l, p.requestsSema)
+	}
+}
+
+// handleDNSRequest processes the context.  The only error it returns is the one
+// from the [Handler].  d must not be nil.
+func (p *Proxy) handleDNSRequest(ctx context.Context, d *DNSContext) (err error) {
+	p.logDNSMessage(ctx, d.Req)
+
+	if d.Req.Response {
+		p.logger.DebugContext(ctx, "dropping incoming response packet", "addr", d.Addr)
+
+		return nil
+	}
+
+	ip := d.Addr.Addr()
+	d.IsPrivateClient = p.privateNets.Contains(ip)
+
+	// TODO(d.kolyshev):  Consider moving validation to a new middleware.
+	d.Res = p.validateRequest(d)
+	if d.Res == nil {
+		err = p.requestHandler.ServeDNS(ctx, p, d)
+		if errors.Is(err, ErrDrop) {
+			// Don't reply to dropped clients.
+			return nil
+		}
+	}
+
+	p.logDNSMessage(ctx, d.Res)
+	p.respond(ctx, d)
+
+	// Don't wrap the error since it's informative enough as is.
+	return err
+}
+
+// isForbiddenARPA returns true if dctx contains a PTR, SOA, or NS request for
+// some private address and client's address is not within the private network.
+// Otherwise, it sets [DNSContext.RequestedPrivateRDNS] for future use.
+func (dctx *DNSContext) isForbiddenARPA(privateNets netutil.SubnetSet, l *slog.Logger) (ok bool) {
+	q := dctx.Req.Question[0]
+	switch q.Qtype {
+	case dns.TypePTR, dns.TypeSOA, dns.TypeNS:
+		// Go on.
+		//
+		// TODO(e.burkov):  Reconsider the list of types involved to private
+		// address space.  Perhaps, use the logic for any type.  See
+		// https://www.rfc-editor.org/rfc/rfc6761.html#section-6.1.
+	default:
+		return false
+	}
+
+	requestedPref, err := netutil.ExtractReversedAddr(q.Name)
+	if err != nil {
+		l.Debug("parsing reversed subnet", slogutil.KeyError, err)
+
+		return false
+	}
+
+	if privateNets.Contains(requestedPref.Addr()) {
+		dctx.RequestedPrivateRDNS = requestedPref
+
+		return !dctx.IsPrivateClient
+	}
+
+	return false
+}
+
+// respond writes the specified response to the client, if any.  d must not be
+// nil.
+func (p *Proxy) respond(ctx context.Context, d *DNSContext) {
+	// d.Conn can be nil in the case of a DoH request.
+	if d.Conn != nil {
+		_ = d.Conn.SetWriteDeadline(p.time.Now().Add(defaultTimeout))
+	}
+
+	var err error
+
+	switch d.Proto {
+	case ProtoUDP:
+		err = p.respondUDP(d.Res, d.Conn.(*net.UDPConn), net.UDPAddrFromAddrPort(d.Addr), d.localIP)
+	case ProtoTCP:
+		err = p.respondTCP(d)
+	case ProtoTLS:
+		err = p.respondTCP(d)
+	case ProtoHTTPS:
+		err = p.respondHTTPS(d)
+	case ProtoQUIC:
+		err = p.respondQUIC(d)
+	case ProtoDNSCrypt:
+		err = p.respondDNSCrypt(ctx, d)
+	default:
+		err = fmt.Errorf("SHOULD NOT HAPPEN - unknown protocol: %s", d.Proto)
+	}
+
+	if err != nil {
+		logWithNonCrit(ctx, err, "responding request", d.Proto, p.logger)
+	}
+}
+
+// setMinMaxTTL sets the TTL values of all records according to the proxy
+// settings.  r must not be nil.
+func (p *Proxy) setMinMaxTTL(ctx context.Context, r *dns.Msg) {
+	rrSets := container.KeyValues[string, []dns.RR]{{
+		Key:   "answer",
+		Value: r.Answer,
+	}, {
+		Key:   "extra",
+		Value: r.Extra,
+	}, {
+		Key:   "ns",
+		Value: r.Ns,
+	}}
+
+	for _, rrSet := range rrSets {
+		for _, rr := range rrSet.Value {
+			original := rr.Header().Ttl
+			overridden := respectTTLOverrides(original, p.cacheMinTTL, p.cacheMaxTTL)
+
+			if original == overridden {
+				continue
+			}
+
+			optslog.Trace3(
+				ctx,
+				p.logger,
+				"ttl overwritten",
+				"section", rrSet.Key,
+				"old", original,
+				"new", overridden,
+			)
+			rr.Header().Ttl = overridden
+		}
+	}
+}
+
+// logDNSMessage logs the given DNS message.
+func (p *Proxy) logDNSMessage(ctx context.Context, m *dns.Msg) {
+	if m == nil {
+		return
+	}
+
+	var msg string
+	if m.Response {
+		msg = "out"
+	} else {
+		msg = "in"
+	}
+
+	slogutil.PrintLines(ctx, p.logger, slog.LevelDebug, msg, m.String())
+}
+
+// logWithNonCrit logs the error on the appropriate level, depending on whether
+// err is a critical error or not.  Connection closure or timeout errors are
+// considered non-critical.  l must not be nil.
+func logWithNonCrit(ctx context.Context, err error, msg string, proto Proto, l *slog.Logger) {
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || isEPIPE(err) {
+		l.DebugContext(
+			ctx,
+			"connection is closed",
+			"proto", proto,
+			"details", msg,
+			slogutil.KeyError, err,
+		)
+	} else if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+		l.DebugContext(
+			ctx,
+			"connection timed out",
+			"proto", proto,
+			"details", msg,
+			slogutil.KeyError, err,
+		)
+	} else {
+		l.ErrorContext(ctx, msg, "proto", proto, slogutil.KeyError, err)
+	}
+}

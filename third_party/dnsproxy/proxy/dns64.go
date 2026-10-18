@@ -1,0 +1,313 @@
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/netip"
+	"slices"
+
+	"github.com/AdguardTeam/dnsproxy/upstream"
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/miekg/dns"
+)
+
+const (
+	// maxNAT64PrefixBitLen is the maximum length of a NAT64 prefix in bits.
+	// See https://datatracker.ietf.org/doc/html/rfc6147#section-5.2.
+	maxNAT64PrefixBitLen = 96
+
+	// NAT64PrefixLength is the length of a NAT64 prefix in bytes.
+	NAT64PrefixLength = net.IPv6len - net.IPv4len
+
+	// maxDNS64SynTTL is the maximum TTL for synthesized DNS64 responses with no
+	// SOA records in seconds.
+	//
+	// If the SOA RR was not delivered with the negative response to the AAAA
+	// query, then the DNS64 SHOULD use the TTL of the original A RR or 600
+	// seconds, whichever is shorter.
+	//
+	// See https://datatracker.ietf.org/doc/html/rfc6147#section-5.1.7.
+	maxDNS64SynTTL uint32 = 600
+)
+
+// setupDNS64 initializes DNS64 settings, the NAT64 prefixes in particular.  If
+// the DNS64 feature is enabled and no prefixes are configured, the default
+// Well-Known Prefix is used, just like Section 5.2 of RFC 6147 prescribes.  Any
+// configured set of prefixes discards the default Well-Known prefix unless it
+// is specified explicitly.  Each prefix also validated to be a valid IPv6 CIDR
+// with a maximum length of 96 bits.  The first specified prefix is then used to
+// synthesize AAAA records.
+//
+// TODO(e.burkov):  Split validation and initialization.
+func (p *Proxy) setupDNS64(dns64Prefs netutil.SliceSubnetSet) (err error) {
+	if !p.useDNS64 {
+		return nil
+	}
+
+	if len(dns64Prefs) == 0 {
+		p.dns64Prefs = netutil.SliceSubnetSet{dns64WellKnownPref}
+
+		return nil
+	}
+
+	for i, pref := range dns64Prefs {
+		if !pref.Addr().Is6() {
+			return fmt.Errorf("prefix at index %d: %q is not an ipv6 prefix", i, pref)
+		}
+
+		if pref.Bits() > maxNAT64PrefixBitLen {
+			return fmt.Errorf("prefix at index %d: %q is too long for dns64", i, pref)
+		}
+
+		p.dns64Prefs = append(p.dns64Prefs, pref.Masked())
+	}
+
+	return nil
+}
+
+// checkDNS64 checks if DNS64 should be performed.  It returns a DNS64 request
+// to resolve or nil if DNS64 is not desired.  It also filters resp to not
+// contain any NAT64 excluded addresses in the answer section, if needed.  Both
+// req and resp must not be nil.
+//
+// See https://datatracker.ietf.org/doc/html/rfc6147.
+func (p *Proxy) checkDNS64(req, resp *dns.Msg) (dns64Req *dns.Msg) {
+	if len(p.dns64Prefs) == 0 {
+		return nil
+	}
+
+	q := req.Question[0]
+	if q.Qtype != dns.TypeAAAA || q.Qclass != dns.ClassINET {
+		// DNS64 operation for classes other than IN is undefined, and a DNS64
+		// MUST behave as though no DNS64 function is configured.
+		return nil
+	}
+
+	switch resp.Rcode {
+	case dns.RcodeNameError:
+		// A result with RCODE=3 (Name Error) is handled according to normal DNS
+		// operation (which is normally to return the error to the client).
+		return nil
+	case dns.RcodeSuccess:
+		// If resolver receives an answer with at least one AAAA record
+		// containing an address outside any of the excluded range(s), then it
+		// by default SHOULD build an answer section for a response including
+		// only the AAAA record(s) that do not contain any of the addresses
+		// inside the excluded ranges.
+		var hasAnswers bool
+		if resp.Answer, hasAnswers = p.filterNAT64Answers(resp.Answer); hasAnswers {
+			return nil
+		}
+	default:
+		// Any other RCODE is treated as though the RCODE were 0 and the answer
+		// section were empty.
+	}
+
+	dns64Req = req.Copy()
+	dns64Req.Id = dns.Id()
+	dns64Req.Question[0].Qtype = dns.TypeA
+
+	return dns64Req
+}
+
+// filterNAT64Answers filters out AAAA records that are within one of NAT64
+// exclusion prefixes.  hasAnswers is true if the filtered slice contains at
+// least a single AAAA answer not within the prefixes.
+func (p *Proxy) filterNAT64Answers(rrs []dns.RR) (filtered []dns.RR, hasAnswers bool) {
+	return slices.DeleteFunc(rrs, func(rr dns.RR) (ok bool) {
+		ans, ok := rr.(*dns.AAAA)
+		if !ok {
+			return false
+		}
+
+		addr, err := netutil.IPToAddrNoMapped(ans.AAAA)
+		if err != nil {
+			// TODO(e.burkov):  Use [slog.Logger.ErrorContext] when this
+			// function accepts a context.
+			p.logger.Error("bad aaaa record", slogutil.KeyError, err)
+
+			return true
+		}
+
+		if p.dns64Prefs.Contains(addr) {
+			return true
+		}
+
+		hasAnswers = true
+
+		return false
+	}), hasAnswers
+}
+
+// synthDNS64 synthesizes a DNS64 response using the original response as a
+// basis and modifying it with data from resp.  It returns true if the response
+// was actually modified.
+func (p *Proxy) synthDNS64(origReq, origResp, resp *dns.Msg) (ok bool) {
+	if len(resp.Answer) == 0 {
+		// If there is an empty answer, then the DNS64 responds to the original
+		// querying client with the answer the DNS64 received to the original
+		// (initiator's) query.
+		return false
+	}
+
+	// The Time to Live (TTL) field is set to the minimum of the TTL of the
+	// original A RR and the SOA RR for the queried domain.  If the original
+	// response contains no SOA records, the minimum of the TTL of the original
+	// A RR and [maxDNS64SynTTL] should be used.  See [maxDNS64SynTTL].
+	soaTTL := maxDNS64SynTTL
+	for _, rr := range origResp.Ns {
+		if hdr := rr.Header(); hdr.Rrtype == dns.TypeSOA && hdr.Name == origReq.Question[0].Name {
+			soaTTL = hdr.Ttl
+
+			break
+		}
+	}
+
+	newAns := make([]dns.RR, 0, len(resp.Answer))
+	for _, ans := range resp.Answer {
+		rr := p.synthRR(ans, soaTTL)
+		if rr == nil {
+			// The error should have already been logged.
+			return false
+		}
+
+		newAns = append(newAns, rr)
+	}
+
+	origResp.Answer = newAns
+	origResp.Ns = resp.Ns
+	origResp.Extra = resp.Extra
+
+	return true
+}
+
+// dns64WellKnownPref is the default prefix to use in an algorithmic mapping for
+// DNS64.  See https://datatracker.ietf.org/doc/html/rfc6052#section-2.1.
+var dns64WellKnownPref = netip.MustParsePrefix("64:ff9b::/96")
+
+// shouldStripDNS64 returns true if DNS64 is enabled and req is a PTR for a
+// reversed address within either one of custom DNS64 prefixes or the Well-Known
+// one.
+//
+// The requirement is to match any Pref64::/n used at the site, and not merely
+// the locally configured Pref64::/n.  This is because end clients could ask for
+// a PTR record matching an address received through a different (site-provided)
+// DNS64.
+//
+// See https://datatracker.ietf.org/doc/html/rfc6147#section-5.3.1.
+func (p *Proxy) shouldStripDNS64(req *dns.Msg) (ok bool) {
+	if len(p.dns64Prefs) == 0 {
+		return false
+	}
+
+	q := req.Question[0]
+	if q.Qtype != dns.TypePTR {
+		return false
+	}
+
+	host := q.Name
+	ip, err := netutil.IPFromReversedAddr(host)
+	if err != nil {
+		p.logger.Debug("failed to parse ip from ptr request", slogutil.KeyError, err)
+
+		return false
+	}
+
+	switch {
+	case p.dns64Prefs.Contains(ip):
+		p.logger.Debug("the ip is within dns64 custom prefix set", "ip", ip)
+	case dns64WellKnownPref.Contains(ip):
+		p.logger.Debug("the ip is within dns64 well-known prefix", "ip", ip)
+	default:
+		return false
+	}
+
+	return true
+}
+
+// mapDNS64 maps addr to IPv6 address using configured DNS64 prefix.  addr must
+// be a valid IPv4.  It panics, if there are no configured DNS64 prefixes,
+// because synthesis should not be performed unless DNS64 function enabled.
+//
+// TODO(e.burkov):  Remove pref from args when old API is removed.
+func (p *Proxy) mapDNS64(addr netip.Addr) (mapped net.IP) {
+	// Don't mask the address here since it should have already been masked on
+	// initialization stage.
+	prefData := p.dns64Prefs[0].Addr().As16()
+	addrData := addr.As4()
+
+	mapped = make(net.IP, net.IPv6len)
+	copy(mapped[:NAT64PrefixLength], prefData[:])
+	copy(mapped[NAT64PrefixLength:], addrData[:])
+
+	return mapped
+}
+
+// synthRR synthesizes a DNS64 resource record in compliance with RFC 6147.  If
+// rr is not an A record, it's returned as is.  A records are modified to become
+// a DNS64-synthesized AAAA records, and the TTL is set according to the
+// original TTL of a record and soaTTL.  It returns nil on invalid A records.
+func (p *Proxy) synthRR(rr dns.RR, soaTTL uint32) (result dns.RR) {
+	aResp, ok := rr.(*dns.A)
+	if !ok {
+		return rr
+	}
+
+	addr, err := netutil.IPToAddr(aResp.A, netutil.AddrFamilyIPv4)
+	if err != nil {
+		p.logger.Error("bad a record", slogutil.KeyError, err)
+
+		return nil
+	}
+
+	aaaa := &dns.AAAA{
+		Hdr: dns.RR_Header{
+			Name:   aResp.Hdr.Name,
+			Rrtype: dns.TypeAAAA,
+			Class:  aResp.Hdr.Class,
+			Ttl:    min(aResp.Hdr.Ttl, soaTTL),
+		},
+		AAAA: p.mapDNS64(addr),
+	}
+
+	return aaaa
+}
+
+// performDNS64 returns the upstream that was used to perform DNS64 request, or
+// nil, if the request was not performed.  If origResp is not nil, origReq must
+// also not be nil.
+func (p *Proxy) performDNS64(
+	ctx context.Context,
+	origReq *dns.Msg,
+	origResp *dns.Msg,
+	upstreams []upstream.Upstream,
+) (u upstream.Upstream) {
+	if origResp == nil {
+		return nil
+	}
+
+	dns64Req := p.checkDNS64(origReq, origResp)
+	if dns64Req == nil {
+		return nil
+	}
+
+	host := origReq.Question[0].Name
+	p.logger.DebugContext(ctx, "received an empty aaaa response, checking dns64", "host", host)
+
+	dns64Resp, u, err := p.exchangeUpstreams(ctx, dns64Req, upstreams)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "dns64 request failed", slogutil.KeyError, err)
+
+		return nil
+	}
+
+	if dns64Resp != nil && p.synthDNS64(origReq, origResp, dns64Resp) {
+		p.logger.DebugContext(ctx, "synthesized aaaa response", "host", host)
+
+		return u
+	}
+
+	return nil
+}

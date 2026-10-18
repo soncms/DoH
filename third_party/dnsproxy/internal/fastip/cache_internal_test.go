@@ -1,0 +1,87 @@
+package fastip
+
+import (
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/AdguardTeam/golibs/logutil/slogutil"
+	"github.com/stretchr/testify/assert"
+)
+
+// TODO(m.kazantsev):  Find a way to move to cache_test.go.
+func TestFastestAddr_CacheAdd(t *testing.T) {
+	f := New(&Config{Logger: slogutil.NewDiscardLogger()})
+	ent := cacheEntry{
+		status:      0,
+		latencyMsec: 111,
+	}
+
+	ip := netip.MustParseAddr("1.1.1.1")
+	f.cacheAdd(&ent, ip, fastestAddrCacheTTLSec)
+
+	// check that it's there
+	assert.NotNil(t, f.cacheFind(ip))
+}
+
+func TestFastestAddr_CacheAdd_timeout(t *testing.T) {
+	f := New(&Config{Logger: slogutil.NewDiscardLogger()})
+	ent := cacheEntry{
+		status:      0,
+		latencyMsec: 111,
+	}
+
+	ip := netip.MustParseAddr("1.1.1.1")
+	f.cacheAdd(&ent, ip, 1)
+
+	// check that it's there
+	assert.NotNil(t, f.cacheFind(ip))
+
+	// wait for more than one second
+	time.Sleep(time.Millisecond * 1001)
+
+	// check that now it returns nil
+	assert.Nil(t, f.cacheFind(ip))
+}
+
+func TestFastestAddr_CacheAdd_successfulOverwrite(t *testing.T) {
+	f := New(&Config{Logger: slogutil.NewDiscardLogger()})
+
+	ip := netip.MustParseAddr("1.1.1.1")
+	f.cacheAddFailure(ip)
+
+	// check that it's there
+	ent := f.cacheFind(ip)
+	assert.NotNil(t, ent)
+	assert.Equal(t, 1, ent.status)
+
+	// check that it will overwrite existing rec
+	f.cacheAddSuccessful(ip, 11)
+
+	// check that it's there now
+	ent = f.cacheFind(ip)
+	assert.NotNil(t, ent)
+	assert.Equal(t, 0, ent.status)
+	assert.Equal(t, uint(11), ent.latencyMsec)
+}
+
+func TestFastestAddr_CacheAdd_failureNoOverwrite(t *testing.T) {
+	f := New(&Config{Logger: slogutil.NewDiscardLogger()})
+
+	ip := netip.MustParseAddr("1.1.1.1")
+	f.cacheAddSuccessful(ip, 11)
+
+	// check that it's there
+	ent := f.cacheFind(ip)
+	assert.NotNil(t, ent)
+	assert.Equal(t, 0, ent.status)
+
+	// check that it will overwrite existing rec
+	f.cacheAddFailure(ip)
+
+	// check that the old record is still there
+	ent = f.cacheFind(ip)
+	assert.NotNil(t, ent)
+	assert.Equal(t, 0, ent.status)
+	assert.Equal(t, uint(11), ent.latencyMsec)
+}

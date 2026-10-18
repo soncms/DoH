@@ -1,0 +1,75 @@
+package proxy
+
+import (
+	"context"
+	"net"
+	"sync"
+	"testing"
+
+	"github.com/AdguardTeam/dnsproxy/internal/dnsproxytest"
+	"github.com/AdguardTeam/golibs/testutil/servicetest"
+	"github.com/miekg/dns"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestFilteringHandler(t *testing.T) {
+	// Initializing the test middleware
+	m := &sync.RWMutex{}
+	blockResponse := false
+
+	reqHandler := &testHandler{
+		OnHandle: func(ctx context.Context, p *Proxy, d *DNSContext) (err error) {
+			m.Lock()
+			defer m.Unlock()
+
+			if !blockResponse {
+				// Use the default Resolve method if response is not blocked.
+				return p.Resolve(ctx, d)
+			}
+
+			resp := dns.Msg{}
+			resp.SetRcode(d.Req, dns.RcodeNotImplemented)
+			resp.RecursionAvailable = true
+
+			// Set the response right away
+			d.Res = &resp
+
+			return nil
+		},
+	}
+
+	// Prepare the proxy server.
+	dnsProxy := mustNew(t, &Config{
+		Logger:         testLogger,
+		TrustedProxies: dnsproxytest.DefaultTrustedProxies,
+		UpstreamConfig: newTestUpstreamConfig(t, newTestUpstream(t)),
+		RequestHandler: reqHandler,
+		UDPListenAddr:  []*net.UDPAddr{net.UDPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+		TCPListenAddr:  []*net.TCPAddr{net.TCPAddrFromAddrPort(dnsproxytest.LocalhostAnyPort)},
+	})
+
+	servicetest.RequireRun(t, dnsProxy, dnsproxytest.Timeout)
+
+	addr := dnsProxy.Addr(ProtoTCP)
+	client := &dns.Client{
+		Net:     string(ProtoTCP),
+		Timeout: dnsproxytest.Timeout,
+	}
+
+	// Send the first message (not blocked)
+	req := dnsproxytest.NewTestRequest()
+
+	r, _, err := client.Exchange(req, addr.String())
+	require.NoError(t, err)
+	dnsproxytest.RequireResponse(t, req, r)
+
+	// Now send the second and make sure it is blocked
+	m.Lock()
+	blockResponse = true
+	m.Unlock()
+
+	r, _, err = client.Exchange(req, addr.String())
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeNotImplemented, r.Rcode)
+}

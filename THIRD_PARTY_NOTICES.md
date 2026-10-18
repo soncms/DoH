@@ -12,9 +12,17 @@ versions and the accompanying license files. `scripts/generate-licenses.ps1`
 collects those texts from the actual dependency sources. The Go runtime license
 is in `licenses/go-toolchain/LICENSE`.
 
-AdGuard dnsproxy v0.86.0 is **Apache-2.0**. Walk and its Win32 bindings use BSD
+AdGuard dnsproxy v0.86.0 is **Apache-2.0** and is locally patched to preserve
+caller cancellation/deadlines during DNSCrypt TCP fallback. Its source, original
+license, upstream hashes and patch description are in `third_party/dnsproxy/`.
+Walk and its Win32 bindings use BSD
 licenses. Walk is locally modified; its original license remains in
 `third_party/walk/LICENSE`, with a copy in `licenses/go/`.
+
+AdGuard DNSCrypt v0.0.3 is **Apache-2.0** and is locally patched to interrupt
+client-owned encrypted and certificate-query sockets on context cancellation.
+Its original license, upstream file hashes and patch description are in
+`third_party/dnscrypt/`; certificate signatures and stamp pins are unchanged.
 
 ## Embedded Windows runtime
 

@@ -1,0 +1,37 @@
+package proxy
+
+import "net/http"
+
+// Default path pattern constants.
+const (
+	// Deprecated: Use pathPatternDNSQuery instead.
+	pathPatternRoot     = "/"
+	pathPatternDNSQuery = "/dns-query"
+)
+
+// Default route pattern constants.
+const (
+	routePatternRootGet      = http.MethodGet + " " + pathPatternRoot
+	routePatternRootPost     = http.MethodPost + " " + pathPatternRoot
+	routePatternDNSQueryGet  = http.MethodGet + " " + pathPatternDNSQuery
+	routePatternDNSQueryPost = http.MethodPost + " " + pathPatternDNSQuery
+)
+
+// routeDoH registers DoH handlers in mux.  mux and p.httpConf must not be nil.
+// p.httpConf.Routes must be valid, if p.httpConf.Routes is empty, the default
+// routes are registered.
+func (p *Proxy) routeDoH(mux *http.ServeMux) {
+	routes := p.httpConf.Routes
+	if len(routes) == 0 {
+		mux.Handle(routePatternRootGet, p)
+		mux.Handle(routePatternRootPost, p)
+		mux.Handle(routePatternDNSQueryGet, p)
+		mux.Handle(routePatternDNSQueryPost, p)
+
+		return
+	}
+
+	for _, route := range routes {
+		mux.Handle(route, p)
+	}
+}

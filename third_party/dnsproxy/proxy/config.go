@@ -1,0 +1,400 @@
+package proxy
+
+import (
+	"crypto/tls"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+	"net/url"
+	"time"
+
+	"github.com/AdguardTeam/dnscrypt"
+	"github.com/AdguardTeam/dnsproxy/upstream"
+	"github.com/AdguardTeam/golibs/contextutil"
+	"github.com/AdguardTeam/golibs/errors"
+	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/AdguardTeam/golibs/validate"
+)
+
+// LogPrefix is a prefix for logging.
+const LogPrefix = "dnsproxy"
+
+const (
+	// DefaultOptimisticMaxAge is default value for
+	// [Config.CacheOptimisticMaxAge].
+	DefaultOptimisticMaxAge = 12 * time.Hour
+
+	// DefaultOptimisticAnswerTTL is default value for
+	// [Config.CacheOptimisticAnswerTTL].
+	DefaultOptimisticAnswerTTL = 30 * time.Second
+)
+
+// Config contains all the fields necessary for proxy configuration.
+//
+// TODO(a.garipov): Consider extracting conf blocks for better fieldalignment.
+type Config struct {
+	// Logger is used as the base logger for the proxy service.  If nil,
+	// [slog.Default] with [LogPrefix] is used.
+	Logger *slog.Logger
+
+	// TrustedProxies is the trusted list of CIDR networks to detect proxy
+	// servers addresses from where the DoH requests should be handled.  The
+	// value of nil makes Proxy not trust any address.
+	TrustedProxies netutil.SubnetSet
+
+	// PrivateSubnets is the set of private networks.  Client having an address
+	// within this set is able to resolve PTR requests for addresses within this
+	// set.
+	PrivateSubnets netutil.SubnetSet
+
+	// MessageConstructor used to build DNS messages.  If nil, the default
+	// constructor will be used.
+	MessageConstructor MessageConstructor
+
+	// PendingRequests is used to mitigate the cache poisoning attacks by
+	// tracking identical requests and returning the same response for them,
+	// performing a single lookup.  If nil, it will be enabled by default.
+	PendingRequests *PendingRequestsConfig
+
+	// RequestContext is a context constructor that returns contexts for
+	// requests.  If not set, the proxy uses [contextutil.EmptyConstructor].
+	RequestContext contextutil.Constructor
+
+	// RequestHandler is an optional custom handler for DNS requests.  It's used
+	// instead of DefaultHandler if set.  In case of [ErrDrop] error returned
+	// from this handler, the proxy will not send any response to the client.
+	RequestHandler Handler
+
+	// UpstreamConfig is a general set of DNS servers to forward requests to.
+	UpstreamConfig *UpstreamConfig
+
+	// PrivateRDNSUpstreamConfig is the set of upstream DNS servers for
+	// resolving private IP addresses.  All the requests considered private will
+	// be resolved via these upstream servers.  Such queries will finish with
+	// [upstream.ErrNoUpstream] if it's empty.
+	PrivateRDNSUpstreamConfig *UpstreamConfig
+
+	// Fallbacks is a list of fallback resolvers.  Those will be used if the
+	// general set fails responding.  It isn't allowed to be empty, but can be
+	// nil, which means not to use fallbacks.
+	//
+	// TODO(e.burkov):  Add explicit boolean for disabling fallbacks.
+	Fallbacks *UpstreamConfig
+
+	// TLSConfig is the TLS configuration.  Required for DNS-over-TLS,
+	// DNS-over-HTTP, and DNS-over-QUIC servers.
+	TLSConfig *tls.Config
+
+	// DNSCryptResolverCert is the DNSCrypt resolver certificate.  Required for
+	// DNSCrypt server.
+	DNSCryptResolverCert *dnscrypt.Certificate
+
+	// BindRetryConfig configures the listeners binding retrying.  If nil,
+	// retries are disabled.
+	BindRetryConfig *BindRetryConfig
+
+	// HTTPConfig is the configuration for HTTP requests proxying.  Required for
+	// DoH server.  If nil, the DoH server is disabled.
+	HTTPConfig *HTTPConfig
+
+	// DNSCryptProviderName is the DNSCrypt provider name.  Required for
+	// DNSCrypt server.
+	DNSCryptProviderName string
+
+	// UpstreamMode determines the logic through which upstreams will be used.
+	// If not specified the [proxy.UpstreamModeLoadBalance] is used.
+	UpstreamMode UpstreamMode
+
+	// UDPListenAddr is the set of UDP addresses to listen for plain
+	// DNS-over-UDP requests.
+	UDPListenAddr []*net.UDPAddr
+
+	// TCPListenAddr is the set of TCP addresses to listen for plain
+	// DNS-over-TCP requests.
+	TCPListenAddr []*net.TCPAddr
+
+	// TLSListenAddr is the set of TCP addresses to listen for DNS-over-TLS
+	// requests.
+	TLSListenAddr []*net.TCPAddr
+
+	// QUICListenAddr is the set of UDP addresses to listen for DNS-over-QUIC
+	// requests.
+	QUICListenAddr []*net.UDPAddr
+
+	// DNSCryptUDPListenAddr is the set of UDP addresses to listen for DNSCrypt
+	// requests.
+	DNSCryptUDPListenAddr []*net.UDPAddr
+
+	// DNSCryptTCPListenAddr is the set of TCP addresses to listen for DNSCrypt
+	// requests.
+	DNSCryptTCPListenAddr []*net.TCPAddr
+
+	// BogusNXDomain is the set of networks used to transform responses into
+	// NXDOMAIN ones if they contain at least a single IP address within these
+	// networks.  It's similar to dnsmasq's "bogus-nxdomain".
+	BogusNXDomain []netip.Prefix
+
+	// DNS64Prefs is the set of NAT64 prefixes used for DNS64 handling.  nil
+	// value disables the feature.  An empty value will be interpreted as the
+	// default Well-Known Prefix.
+	DNS64Prefs []netip.Prefix
+
+	// EDNSAddr is the ECS IP used in request.
+	EDNSAddr net.IP
+
+	// CacheSizeBytes is the maximum cache size in bytes.
+	CacheSizeBytes int
+
+	// CacheMinTTL is the minimum TTL for cached DNS responses in seconds.
+	CacheMinTTL uint32
+
+	// CacheMaxTTL is the maximum TTL for cached DNS responses in seconds.
+	CacheMaxTTL uint32
+
+	// CacheOptimisticAnswerTTL is the default TTL for expired cached responses.
+	// Default value is [DefaultOptimisticAnswerTTL].
+	CacheOptimisticAnswerTTL time.Duration
+
+	// CacheOptimisticMaxAge is the maximum time entries remain in the cache
+	// when cache is optimistic.  Default value is [DefaultOptimisticMaxAge].
+	CacheOptimisticMaxAge time.Duration
+
+	// MaxGoroutines is the maximum number of goroutines processing DNS
+	// requests.  Important for mobile users.
+	//
+	// TODO(a.garipov): Rename this to something like “MaxDNSRequestGoroutines”
+	// in a later major version, as it doesn't actually limit all goroutines.
+	MaxGoroutines uint
+
+	// The size of the read buffer on the underlying socket.  Larger read
+	// buffers can handle larger bursts of requests before packets get dropped.
+	UDPBufferSize int
+
+	// FastestPingTimeout is the timeout for waiting the first successful
+	// dialing when the UpstreamMode is set to [UpstreamModeFastestAddr].
+	// Non-positive value will be replaced with the default one.
+	FastestPingTimeout time.Duration
+
+	// RefuseAny makes proxy refuse the requests of type ANY.
+	RefuseAny bool
+
+	// DNSSECEnabled specifies if the proxy should set the DO bits in the
+	// upstream requests.
+	DNSSECEnabled bool
+
+	// Enable EDNS Client Subnet option DNS requests to the upstream server will
+	// contain an OPT record with Client Subnet option.  If the original request
+	// already has this option set, we pass it through as is.  Otherwise, we set
+	// it ourselves using the client IP with subnet /24 (for IPv4) and /56 (for
+	// IPv6).
+	//
+	// If the upstream server supports ECS, it sets subnet number in the
+	// response.  This subnet number along with the client IP and other data is
+	// used as a cache key.  Next time, if a client from the same subnet
+	// requests this host name, we get the response from cache.  If another
+	// client from a different subnet requests this host name, we pass his
+	// request to the upstream server.
+	//
+	// If the upstream server doesn't support ECS (there's no subnet number in
+	// response), this response will be cached for all clients.
+	//
+	// If client IP is private (i.e. not public), we don't add EDNS record into
+	// a request.  And so there will be no EDNS record in response either.  We
+	// store these responses in general cache (without subnet) so they will
+	// never be used for clients with public IP addresses.
+	EnableEDNSClientSubnet bool
+
+	// CacheEnabled defines if the response cache should be used.
+	CacheEnabled bool
+
+	// CacheOptimistic defines if the optimistic cache mechanism should be used.
+	CacheOptimistic bool
+
+	// UseDNS64 enables DNS64 handling.  If true, proxy will translate IPv4
+	// answers into IPv6 answers using first of DNS64Prefs.  Note also that PTR
+	// requests for addresses within the specified networks are considered
+	// private and will be forwarded as PrivateRDNSUpstreamConfig specifies.
+	// Those will be responded with NXDOMAIN if UsePrivateRDNS is false.
+	UseDNS64 bool
+
+	// UsePrivateRDNS defines if the PTR requests for private IP addresses
+	// should be resolved via PrivateRDNSUpstreamConfig.  Note that it requires
+	// a valid PrivateRDNSUpstreamConfig with at least a single general upstream
+	// server.
+	UsePrivateRDNS bool
+
+	// PreferIPv6 tells the proxy to prefer IPv6 addresses when bootstrapping
+	// upstreams that use hostnames.
+	PreferIPv6 bool
+}
+
+// PendingRequestsConfig is the configuration for tracking identical requests.
+type PendingRequestsConfig struct {
+	// Enabled defines if the duplicate requests should be tracked.
+	Enabled bool
+}
+
+// HTTPConfig is the configuration for HTTP requests proxying.
+type HTTPConfig struct {
+	// Userinfo is the sole permitted userinfo for the DoH basic authentication.
+	// If Userinfo is set, all DoH queries are required to have this basic
+	// authentication information.
+	Userinfo *url.Userinfo
+
+	// ServerHeader sets the Server header of the HTTPS server responses, if not
+	// empty.
+	ServerHeader string
+
+	// ListenAddresses is the set of addresses to listen for DNS-over-HTTPS
+	// requests.  If it is empty the proxy doesn't start the HTTPS server, but
+	// still can be used as an http.Handler with [Proxy.ServeHTTP].
+	ListenAddresses []netip.AddrPort
+
+	// Routes is the set of routes to handle.  It must be a slice of valid route
+	// patterns, if it is empty, the default routes are registered.  It is
+	// ignored if ListenAddresses is empty.
+	Routes []string
+
+	// ReadTimeout is the maximum duration before timing out reads of the
+	// request.  A zero or negative value means there will be no timeout.  It is
+	// ignored if ListenAddresses is empty.
+	ReadTimeout time.Duration
+
+	// WriteTimeout is the maximum duration before timing out writes of the
+	// response.  A zero or negative value means there will be no timeout.  It
+	// is ignored if ListenAddresses is empty.
+	WriteTimeout time.Duration
+
+	// HTTP3Enabled specifies if HTTP/3 support for HTTPS server.  It is ignored
+	// if ListenAddresses is empty.
+	HTTP3Enabled bool
+
+	// InsecureEnabled specifies if unencrypted DoH requests are allowed.
+	InsecureEnabled bool
+}
+
+// type check
+var _ validate.Interface = (*Config)(nil)
+
+// Validate implements the [validate.Interface] for *Config.
+//
+// TODO(f.setrakov): Refactor configuration validation according to the
+// interface contracts.
+func (c *Config) Validate() (err error) {
+	err = c.UpstreamConfig.Validate()
+	if err != nil {
+		return fmt.Errorf("general upstreams: %w", err)
+	}
+
+	err = ValidatePrivateConfig(c.PrivateRDNSUpstreamConfig, c.PrivateSubnets)
+	if err != nil {
+		if c.UsePrivateRDNS || errors.Is(err, upstream.ErrNoUpstreams) {
+			return fmt.Errorf("private rdns upstreams: %w", err)
+		}
+	}
+
+	err = c.Fallbacks.Validate()
+
+	// Allow [Config.Fallbacks] to be nil, but not empty.  nil means not to use
+	// fallbacks at all.
+	if errors.Is(err, upstream.ErrNoUpstreams) {
+		return fmt.Errorf("fallbacks: %w", err)
+	}
+
+	switch c.UpstreamMode {
+	case
+		"",
+		UpstreamModeFastestAddr,
+		UpstreamModeLoadBalance,
+		UpstreamModeParallel:
+		// Go on.
+	default:
+		return fmt.Errorf("upstream mode: %w: %q", errors.ErrBadEnumValue, c.UpstreamMode)
+	}
+
+	if c.HTTPConfig != nil && c.HTTPConfig.Userinfo != nil {
+		return validate.NotEmptySlice("HTTPConfig.ListenAddresses", c.HTTPConfig.ListenAddresses)
+	}
+
+	return nil
+}
+
+// logConfigInfo logs proxy configuration information.
+func (p *Proxy) logConfigInfo() {
+	if p.cacheMinTTL > 0 || p.cacheMaxTTL > 0 {
+		p.logger.Info("cache ttl override is enabled", "min", p.cacheMinTTL, "max", p.cacheMaxTTL)
+	}
+
+	if p.refuseAny {
+		p.logger.Info("server will refuse requests of type any")
+	}
+
+	if len(p.bogusNXDomain) > 0 {
+		p.logger.Info("bogus-nxdomain ip specified", "prefix_len", len(p.bogusNXDomain))
+	}
+
+	if p.upstreamMode != "" {
+		p.logger.Info("upstream mode is set", "mode", p.upstreamMode)
+	}
+}
+
+// validateListenAddrs returns an error if the addresses are not configured
+// properly.
+//
+// TODO(e.burkov):  Move to configuration validation.
+func (p *Proxy) validateListenAddrs() (err error) {
+	if !p.hasListenAddrs() {
+		return fmt.Errorf("listen addresses: %w", errors.ErrNoValue)
+	}
+
+	err = p.validateTLSConfig()
+	if err != nil {
+		return fmt.Errorf("invalid tls configuration: %w", err)
+	}
+
+	if p.dnsCryptResolverCert == nil || p.dnsCryptProviderName == "" {
+		if p.dnsCryptTCPListenAddr != nil {
+			return errors.Error("cannot create dnscrypt tcp listener without dnscrypt config")
+		}
+
+		if p.dnsCryptUDPListenAddr != nil {
+			return errors.Error("cannot create dnscrypt udp listener without dnscrypt config")
+		}
+	}
+
+	return nil
+}
+
+// validateTLSConfig returns an error if proxy TLS configuration parameters are
+// needed but aren't provided.
+func (p *Proxy) validateTLSConfig() (err error) {
+	if p.tlsConf != nil {
+		return nil
+	}
+
+	if p.tlsListenAddr != nil {
+		return errors.Error("tls listener configuration not found")
+	}
+
+	if p.httpConf != nil && p.httpConf.ListenAddresses != nil {
+		return errors.Error("https listener configuration not found")
+	}
+
+	if p.quicListenAddr != nil {
+		return errors.Error("quic listener configuration not found")
+	}
+
+	return nil
+}
+
+// hasListenAddrs returns true if p has at least one configured listen address.
+func (p *Proxy) hasListenAddrs() (ok bool) {
+	return p.udpListenAddr != nil ||
+		p.tcpListenAddr != nil ||
+		p.tlsListenAddr != nil ||
+		(p.httpConf != nil && p.httpConf.ListenAddresses != nil) ||
+		p.quicListenAddr != nil ||
+		p.dnsCryptUDPListenAddr != nil ||
+		p.dnsCryptTCPListenAddr != nil
+}

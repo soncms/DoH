@@ -29,4 +29,8 @@ require (
 
 replace github.com/lxn/walk => ./third_party/walk
 
+replace github.com/AdguardTeam/dnscrypt => ./third_party/dnscrypt
+
+replace github.com/AdguardTeam/dnsproxy => ./third_party/dnsproxy
+
 tool github.com/akavel/rsrc

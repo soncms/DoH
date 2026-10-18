@@ -1,0 +1,314 @@
+{
+  "module": "github.com/AdguardTeam/dnscrypt",
+  "version": "v0.0.3",
+  "files": [
+    {
+      "path": ".dockerignore",
+      "sha256": "0af570701272f37df21382ff389daa0e2b33ed7739f9b11c02da7a1e58ef5228"
+    },
+    {
+      "path": ".github/CODEOWNERS",
+      "sha256": "2bb884aff1f47778b1ff2e14fbca2bbf7778465f2f64d67b253764e1d4d61fb8"
+    },
+    {
+      "path": ".github/workflows/mirror.yaml",
+      "sha256": "cb708f1feb1376593e3d5d0bfd03fe829ac06fb787c4a820763e2f5567c020cc"
+    },
+    {
+      "path": ".github/workflows/private.yaml",
+      "sha256": "f70eee0f8b99dc1a8ee99d4b6076d3d36eadbe12dc1928e2f78b63b6070bb2c7"
+    },
+    {
+      "path": ".github/workflows/workflow.yaml",
+      "sha256": "5f6a96bd1f58443cf6b6b317a52d3c769a5f955ac01e940f0be0289fc670f023"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "818047be5ea42945983ccc3c6a022e0f45b656bf91f66cce463ba34ddb5857ca"
+    },
+    {
+      "path": ".markdownlint.json",
+      "sha256": "6df03964676488745350a838f2992f9f4cf7b6433611b0b4046cbeb0f48d3516"
+    },
+    {
+      "path": "certificate.go",
+      "sha256": "7cc723e11a4c4e2a75e5a8a80737c42afbf95ac63b339558e9a4bb96fd73a21b"
+    },
+    {
+      "path": "certificate_internal_test.go",
+      "sha256": "f32fa08c7683960b4b66a87edb2d8e777d8617ed7e9a307a292e50f3c06fe434"
+    },
+    {
+      "path": "client.go",
+      "sha256": "554d8ec6879e1e9e6db87381c67d35cffc40197df0b87691fbd356abee3595c3"
+    },
+    {
+      "path": "client_internal_test.go",
+      "sha256": "3092026a38451d48f6728937e3cd5966e0705f2dc71e94c3e12296cc7685bcc8"
+    },
+    {
+      "path": "client_test.go",
+      "sha256": "925d2e3c53ceb9c9bfa127bc67fdb975c032805605b3466da53c3ee31239b94f"
+    },
+    {
+      "path": "cmd/dnscrypt/main.go",
+      "sha256": "75ec5be9062f623d5d4cc9abd6998b8361dd381f555293bb2a851b3fb47c23a2"
+    },
+    {
+      "path": "construction.go",
+      "sha256": "fd8da0115179d7f4cf1d443618003a5fce169ed77ac53be94e8663b42d361d5e"
+    },
+    {
+      "path": "construction_test.go",
+      "sha256": "ba792da4860fa3178a2be28c1a68712925fc86dea1c4bcc0cac4a76f5f0c749b"
+    },
+    {
+      "path": "dns.go",
+      "sha256": "c70dc0f948b5ea8ed841c70a0ee3abb181ac4986d5eded4953d7b040e30b3288"
+    },
+    {
+      "path": "dnscrypt.go",
+      "sha256": "1bfd20efc58d3b1240b80c0c42236e49dd6677010977386b669ef03a69718b40"
+    },
+    {
+      "path": "dnscrypt_test.go",
+      "sha256": "adbb909d8a1e4fbea97f6d0eff35b9d50b582e338b6f28f3e9af067b2ef5d79d"
+    },
+    {
+      "path": "doc/api.md",
+      "sha256": "8464447bad5e8391197752fecbb326fc93eb65a45e37d2473dc7fd5a923cb2bf"
+    },
+    {
+      "path": "doc/cli.md",
+      "sha256": "11e6709504d5cc35eb7ea5aac95e23378aa0fa205f16b72ff9c221d22a700283"
+    },
+    {
+      "path": "docker/ci.Dockerfile",
+      "sha256": "8949e2786de8ca05cadc55be4bade606c83a83577c720f7ef8fddbdb547c1351"
+    },
+    {
+      "path": "encryptedquery.go",
+      "sha256": "2fa13ac9d70ef4f23b3690989f2d27a7c2455ad1d40e1c7665e6fd007be045ff"
+    },
+    {
+      "path": "encryptedquery_internal_test.go",
+      "sha256": "a422dfb99e899fe100b7a7ff93a9b6280d309e1863a0959731a6948ffa4c2990"
+    },
+    {
+      "path": "encryptedresp.go",
+      "sha256": "95883faaab45b0595dabfb39c12d2460af1c3b906bffa301510241544339db27"
+    },
+    {
+      "path": "encryptedresp_internal_test.go",
+      "sha256": "902a8960b456acdd311120d63a2e11807089d5cfc2410eed5602640349daa708"
+    },
+    {
+      "path": "encryption.go",
+      "sha256": "c8b62ded3376da358d01ca75924dcab41efbc3f00ee6414601863cb6122dc1a8"
+    },
+    {
+      "path": "encryption_internal_test.go",
+      "sha256": "0d1cf3336ca3a578b4ecd8fb1d004d19f2013565a6ccfe415254501beafe7756"
+    },
+    {
+      "path": "error.go",
+      "sha256": "8d38355c6ef7b2110a299660d9aa32adc81840dbc6d430303e9e38ed7732d98f"
+    },
+    {
+      "path": "generate.go",
+      "sha256": "6250b43709148cb2a62d315dc70a5bdbe69d275eaf74c1efb50eba5ffc52c57e"
+    },
+    {
+      "path": "generate_test.go",
+      "sha256": "cde0fc7ccc8ca6e3a95bd45cf4d80eb8ec005e7e05b85e9b9525841b44c023e3"
+    },
+    {
+      "path": "go.mod",
+      "sha256": "c24e49468e2504ec2d4c9ca47e1bcb1d76b7951dde0094430a0b2022ae8ff62c"
+    },
+    {
+      "path": "go.sum",
+      "sha256": "0b5616b6ac67f5387bd6a1b3b4e5a9cdf7f42176fd31196d950667ce5acc89e7"
+    },
+    {
+      "path": "handler.go",
+      "sha256": "1b8f94cf1020e3733f4e26d03367ba7fa20c02206a328a34c8bdbb96012ad15f"
+    },
+    {
+      "path": "internal/cmd/action.go",
+      "sha256": "92c4728857918c394f3c2b4e333bf7f813088e3bcde7af1b6dae9dcc7a080277"
+    },
+    {
+      "path": "internal/cmd/cmd.go",
+      "sha256": "c8facbabf573a342a1f708d21c511edbf4bdff5d61ad9224197d2fc45fec5d1c"
+    },
+    {
+      "path": "internal/cmd/convert.go",
+      "sha256": "77883d0e658142a892aff1d42c1f98d8d583ae5638b0b21edc72526b111224df"
+    },
+    {
+      "path": "internal/cmd/flag.go",
+      "sha256": "618ae1600cdecb14222fa28ff95a87ea109d81b881c1dca7c8783b7a09e08c8c"
+    },
+    {
+      "path": "internal/cmd/generate.go",
+      "sha256": "3ad56fc73bb41e91032265ae1a6ebdf5348fa3506dd64ca6982d1814958e6e29"
+    },
+    {
+      "path": "internal/cmd/lookup.go",
+      "sha256": "d38c4c09385e8b6a6d2233ad27fe48dd4d684ea5ca0b032432df490cb593d7aa"
+    },
+    {
+      "path": "internal/cmd/server.go",
+      "sha256": "dab1826001f9ad56855a06ed35ee4f474a8a78d7c5517f2df3087c90b4d365da"
+    },
+    {
+      "path": "internal/cmd/value.go",
+      "sha256": "f36ff48fd2bea138e418f3c6b119ce2dfb829d3588ac48c45cc8031a7e2cb401"
+    },
+    {
+      "path": "internal/dnscrypttest/dns.go",
+      "sha256": "d551e95b5afc6bc9896e0b64747ee2426931c070b58ef57fd94b92135542f1a6"
+    },
+    {
+      "path": "internal/dnscrypttest/dnscrypttest.go",
+      "sha256": "51fa248715b9e1d4b443196d9c408487ff17d3862091a5ff8af72b501fb1d275"
+    },
+    {
+      "path": "internal/forward/forward.go",
+      "sha256": "ab5067cbcb04d9473cf7e478b9cfb5e2c0a8115d26ddc83896ec3f9299f63bc9"
+    },
+    {
+      "path": "internal/forward/handler.go",
+      "sha256": "966973952af90bb7c349faa890db31106b6efcabcc747ba3608f3f974752e477"
+    },
+    {
+      "path": "internal/version/norace.go",
+      "sha256": "684cf707837b7dfe09355558543763c87b97aae1874fe68a959e4273d4bacc85"
+    },
+    {
+      "path": "internal/version/race.go",
+      "sha256": "637aa1c7cfecd1d083361d476673f0f68ea15a44ece0799fb0033d4a59e406df"
+    },
+    {
+      "path": "internal/version/version.go",
+      "sha256": "26d14a3e65496d5f164b35f51f958db775e78217b22488b546357b35b1df6867"
+    },
+    {
+      "path": "internal/xsecretbox/error.go",
+      "sha256": "1533f6e96975850b31807734156a5741758e7990bcda19183008b13cb4665006"
+    },
+    {
+      "path": "internal/xsecretbox/sharedkey.go",
+      "sha256": "9166d1560b8ca1a01cec43d399726afc92e89048f33d95419aaa0ef0e49f14c9"
+    },
+    {
+      "path": "internal/xsecretbox/xsecretbox.go",
+      "sha256": "3cf25b0d8b87dbef540114d34793969b9afe66a32adc2c4fe6157e5cb6e9c93f"
+    },
+    {
+      "path": "internal/xsecretbox/xsecretbox_test.go",
+      "sha256": "b7074c414cbafc5bfc704e18bd518db062caa094e3f5efcb2e7e8828fdc077b6"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "6a90b88421a0d9b090e121daa11b3c6d55eed5eeb3281a2fcc454d6a28b5547c"
+    },
+    {
+      "path": "Makefile",
+      "sha256": "53931ecf474223995ba0efc1edc1f92335f8eb906e2e2409f1e828ed50d51a88"
+    },
+    {
+      "path": "proto.go",
+      "sha256": "0f156bb75e12aa7aa6752bd32968efdfa347ec6cad2d2002e645916f163743fd"
+    },
+    {
+      "path": "README.md",
+      "sha256": "248e2be84d94c9534a73f3774383b3b31868fd1494f27fbfc5173da10561d23d"
+    },
+    {
+      "path": "scripts/hooks/helper.sh",
+      "sha256": "737ca3bcbaab30ec3f2300ce5aeb870b7959616b4c58956e7cd90ebd4e212e76"
+    },
+    {
+      "path": "scripts/hooks/pre-commit",
+      "sha256": "9459e7bc54c8194c384c8135c66b6533c7277fc5633d477bc53091f66a53be3e"
+    },
+    {
+      "path": "scripts/hooks/pre-merge-commit",
+      "sha256": "e64482327c3722cbec8297dd8f1930a58d433630f6449fd9813dbce3f6173ca4"
+    },
+    {
+      "path": "scripts/make/go-build.sh",
+      "sha256": "b22b56174d2d40b06d94d81f36936ad99cb18c7f154221dffdbc3c2c0460ed6d"
+    },
+    {
+      "path": "scripts/make/go-deps.sh",
+      "sha256": "6ddddc3ced78c2b1698fe64abf04c2ead8c1345c784cad07b3521cb81ed7f3a4"
+    },
+    {
+      "path": "scripts/make/go-lint.sh",
+      "sha256": "802c223e8d2556a82b1ccc137faf75e9f5887283b43f811fc4ed91a08ea6826c"
+    },
+    {
+      "path": "scripts/make/go-test.sh",
+      "sha256": "43745b7c6e55f50004cad97d8ef836b62afc5080c620cc72ee8d708090fef99e"
+    },
+    {
+      "path": "scripts/make/go-upd-tools.sh",
+      "sha256": "a13110deca21f5ccb8ab71635eaf4d34ad4e5101df1cf7f3394440e1a2f87410"
+    },
+    {
+      "path": "scripts/make/helper.sh",
+      "sha256": "06f7caf130a5b9f6bfb78ae4f5a53bb1bf991ca3a6dd3f4a66512f76fc7d6db0"
+    },
+    {
+      "path": "scripts/make/md-lint.sh",
+      "sha256": "1751f629789aea78146a1c18d096dad86c672bfaf1f744b042eedaba87e137d2"
+    },
+    {
+      "path": "scripts/make/sh-lint.sh",
+      "sha256": "11da537c656a17c9f1349c7b375307dea608bbf26c9c91bd4cf9038df2e446af"
+    },
+    {
+      "path": "scripts/make/txt-lint.sh",
+      "sha256": "b8178135e0b07785be7ec0420f8db2cd953fa8752408f2cd5650a26767de14e9"
+    },
+    {
+      "path": "server.go",
+      "sha256": "e2385c4002c6e9797432f1657f8bdae0cdf9c24996ff057d008a3e6a3e43aa0f"
+    },
+    {
+      "path": "server_internal_test.go",
+      "sha256": "2770533c530e533697b8bdbb358e7f33496cd336be23e7563cd8d3b98708dd8f"
+    },
+    {
+      "path": "server_test.go",
+      "sha256": "eac66098db9361d99e4ec3496718f2841bddd2dc8e879c8aa1757dcf9e316f31"
+    },
+    {
+      "path": "servertcp.go",
+      "sha256": "28ba1b6246c6deb674d62ed658c469b366d7a242fb6101a484dc7c409466ce38"
+    },
+    {
+      "path": "serverudp.go",
+      "sha256": "70837168480b995ac5f0f105c03a1020a6376e886c22c6f05cbb5dd659085d47"
+    },
+    {
+      "path": "staticcheck.conf",
+      "sha256": "09702cf7607f098ca19d9e8754e95cdf1c3a0eb8ea1039cf80f1f3687d3361fd"
+    },
+    {
+      "path": "string.go",
+      "sha256": "00d3a946b407d5feccf98c26c7c5a8e2acc6465a4999b27146b440c4aab4b406"
+    },
+    {
+      "path": "string_internal_test.go",
+      "sha256": "0b4afcfd626a2f2230707ccabf434beb31fc2b3bf23827d86c40d7e41fe59b2e"
+    },
+    {
+      "path": "testdata/dnscrypt-cert.opendns.txt",
+      "sha256": "2e4068a8fd98802c32ab32aa14c3714b8d668464ef37541e8154c6cb7f6267eb"
+    }
+  ]
+}

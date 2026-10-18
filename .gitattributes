@@ -3,3 +3,5 @@
 /third_party/zapret2/** -text
 /assets/cygwin-3.4.10-git-tree.json -text
 /native-source-cache/** -text
+/third_party/dnscrypt/** -text
+/third_party/dnsproxy/** -text
