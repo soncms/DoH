@@ -3,20 +3,31 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 type testEngineProxy struct {
+	mu        sync.Mutex
 	upstreams []Upstream
 }
 
-func (p *testEngineProxy) SetUpstreams(items []Upstream) error {
+func (p *testEngineProxy) SetUpstreams(_ context.Context, items []Upstream) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.upstreams = items
 	return nil
+}
+
+func (p *testEngineProxy) snapshot() []Upstream {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]Upstream(nil), p.upstreams...)
 }
 
 func TestDNSIPCServerRoundTrip(t *testing.T) {
@@ -25,7 +36,9 @@ func TestDNSIPCServerRoundTrip(t *testing.T) {
 	server := newDNSIPCServer(ring, proxy)
 	server.pipeName = fmt.Sprintf(`\\.\pipe\SonDNS-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	call := func(req dnsIPCRequest) (dnsIPCResponse, error) { return callDNSIPCAt(server.pipeName, req) }
-	server.start()
+	if err := server.start(); err != nil {
+		t.Fatal(err)
+	}
 	defer server.close()
 	ring.Add(DNSRequestEntry{Domain: "example.com.", Type: "A", Result: "NOERROR", AnswerIPs: []string{"192.0.2.1"}})
 	var response dnsIPCResponse
@@ -43,8 +56,8 @@ func TestDNSIPCServerRoundTrip(t *testing.T) {
 	if response.InstanceID == "" {
 		t.Fatal("expected instance id in response")
 	}
-	if _, err = call(dnsIPCRequest{Op: "set_upstream", Upstreams: []Upstream{PredefinedUpstream(ProviderNextDNS)}}); err != nil || len(proxy.upstreams) != 1 || proxy.upstreams[0].URL != URLNextDNS {
-		t.Fatalf("set_upstream failed: %v, proxy upstreams: %+v", err, proxy.upstreams)
+	if _, err = call(dnsIPCRequest{Op: "set_upstream", Upstreams: []Upstream{PredefinedUpstream(ProviderNextDNS)}}); err != nil || len(proxy.snapshot()) != 1 || proxy.snapshot()[0].URL != URLNextDNS {
+		t.Fatalf("set_upstream failed: %v, proxy upstreams: %+v", err, proxy.snapshot())
 	}
 	response, err = call(dnsIPCRequest{Op: "clear_log"})
 	if err != nil || len(response.Entries) != 0 {

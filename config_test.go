@@ -34,6 +34,29 @@ func TestLoadConfigURLOnlyDoesNotInheritDefaultBootstrap(t *testing.T) {
 	}
 }
 
+func TestCurrentProviderRecognizesOnlyExactPresets(t *testing.T) {
+	for _, tc := range []struct {
+		urls []string
+		want string
+	}{
+		{[]string{URLSonCMS}, ProviderSonCMS},
+		{[]string{URLNextDNS}, ProviderNextDNS},
+		{[]string{"https://dns.nextdns.io/my-profile"}, ProviderCustom},
+		{[]string{"https://nextdns.attacker.example/dns-query"}, ProviderCustom},
+		{[]string{"https://resolver.example/dns-query"}, ProviderCustom},
+		{[]string{URLSonCMS, URLNextDNS}, ProviderCustom},
+		{nil, ProviderCustom},
+	} {
+		var c Config
+		for _, url := range tc.urls {
+			c.Upstreams = append(c.Upstreams, Upstream{URL: url})
+		}
+		if got := c.CurrentProvider(); got != tc.want {
+			t.Errorf("%v: got %q want %q", tc.urls, got, tc.want)
+		}
+	}
+}
+
 func TestUnmarshalConfigReplacesUpstreamFields(t *testing.T) {
 	config := DefaultConfig()
 	config.Upstreams[0].DNSSEC = true

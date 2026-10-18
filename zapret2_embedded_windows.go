@@ -4,7 +4,7 @@ package main
 
 import _ "embed"
 
-// These assets are extracted to ProgramData\SonDNS\zapret2 at runtime. The
+// These assets are extracted under runtime/embedded beside SonDNS.exe. The
 // user-facing artifact remains a single SonDNS.exe; no helper installation is
 // required on the destination machine.
 //

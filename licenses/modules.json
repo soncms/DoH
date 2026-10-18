@@ -1,0 +1,155 @@
+[
+  {
+    "module": "github.com/AdguardTeam/dnscrypt",
+    "version": "v0.0.3",
+    "directory": "go/github.com_AdguardTeam_dnscrypt",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/AdguardTeam/dnsproxy",
+    "version": "v0.86.0",
+    "directory": "go/github.com_AdguardTeam_dnsproxy",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/AdguardTeam/golibs",
+    "version": "v0.35.17",
+    "directory": "go/github.com_AdguardTeam_golibs",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/ameshkov/dnsstamps",
+    "version": "v1.0.3",
+    "directory": "go/github.com_ameshkov_dnsstamps",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/bluele/gcache",
+    "version": "v0.0.2",
+    "directory": "go/github.com_bluele_gcache",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/lxn/walk",
+    "version": "v0.0.0-20210112085537-c389da54e794",
+    "directory": "go/github.com_lxn_walk",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/lxn/win",
+    "version": "v0.0.0-20210218163916-a377121e959e",
+    "directory": "go/github.com_lxn_win",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/miekg/dns",
+    "version": "v1.1.73",
+    "directory": "go/github.com_miekg_dns",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/quic-go/qpack",
+    "version": "v0.6.0",
+    "directory": "go/github.com_quic-go_qpack",
+    "files": [
+      "LICENSE.md"
+    ]
+  },
+  {
+    "module": "github.com/quic-go/quic-go",
+    "version": "v0.64.0",
+    "directory": "go/github.com_quic-go_quic-go",
+    "files": [
+      "assets/LICENSE.md",
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "github.com/robfig/cron/v3",
+    "version": "v3.0.1",
+    "directory": "go/github.com_robfig_cron_v3",
+    "files": [
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "golang.org/x/crypto",
+    "version": "v0.58.0",
+    "directory": "go/golang.org_x_crypto",
+    "files": [
+      "LICENSE",
+      "PATENTS"
+    ]
+  },
+  {
+    "module": "golang.org/x/exp",
+    "version": "v0.0.0-20260611194520-c48552f49976",
+    "directory": "go/golang.org_x_exp",
+    "files": [
+      "LICENSE",
+      "PATENTS"
+    ]
+  },
+  {
+    "module": "golang.org/x/net",
+    "version": "v0.61.0",
+    "directory": "go/golang.org_x_net",
+    "files": [
+      "LICENSE",
+      "PATENTS"
+    ]
+  },
+  {
+    "module": "golang.org/x/sys",
+    "version": "v0.49.0",
+    "directory": "go/golang.org_x_sys",
+    "files": [
+      "LICENSE",
+      "PATENTS"
+    ]
+  },
+  {
+    "module": "golang.org/x/text",
+    "version": "v0.43.0",
+    "directory": "go/golang.org_x_text",
+    "files": [
+      "LICENSE",
+      "PATENTS"
+    ]
+  },
+  {
+    "module": "gonum.org/v1/gonum",
+    "version": "v0.17.0",
+    "directory": "go/gonum.org_v1_gonum",
+    "files": [
+      "graph/formats/cytoscapejs/testdata/LICENSE",
+      "graph/formats/rdf/testdata/LICENSE.md",
+      "graph/formats/sigmajs/testdata/LICENSE.txt",
+      "LICENSE"
+    ]
+  },
+  {
+    "module": "gopkg.in/Knetic/govaluate.v3",
+    "version": "v3.0.0",
+    "directory": "go/gopkg.in_Knetic_govaluate.v3",
+    "files": [
+      "LICENSE"
+    ]
+  }
+]

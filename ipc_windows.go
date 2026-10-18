@@ -4,11 +4,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -34,93 +36,308 @@ type dnsIPCResponse struct {
 	OverwrittenRows uint64            `json:"overwritten_rows,omitempty"`
 	Entries         []DNSRequestEntry `json:"entries,omitempty"`
 	Error           string            `json:"error,omitempty"`
+	State           any               `json:"state,omitempty"`
 }
 
 type dnsEngineProxy interface {
-	SetUpstreams([]Upstream) error
+	SetUpstreams(context.Context, []Upstream) error
 }
+
+const (
+	ipcMaxHandlers      = 8
+	ipcMaxRequestBytes  = 64 * 1024
+	ipcMaxResponseBytes = 4 * 1024 * 1024
+	ipcIOTimeout        = 3 * time.Second
+	// GENERIC_WRITE includes FILE_CREATE_PIPE_INSTANCE on a named pipe.
+	// Clients need data I/O, never permission to create another server instance.
+	ipcClientAccess = windows.FILE_READ_DATA | windows.FILE_WRITE_DATA | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
+	ipcClientFlags  = windows.FILE_FLAG_OVERLAPPED | windows.SECURITY_SQOS_PRESENT | windows.SECURITY_IDENTIFICATION
+)
 
 type dnsIPCServer struct {
 	pipeName   string
 	instanceID string
 	ring       *DNSRequestRing
 	proxy      dnsEngineProxy
-	stop       chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
 	done       chan struct{}
 	mu         sync.Mutex
-	active     windows.Handle
+	active     map[windows.Handle]*os.File
+	ownerSID   string
+	elevated   bool
 }
 
 func newDNSIPCServer(ring *DNSRequestRing, proxy dnsEngineProxy) *dnsIPCServer {
-	id := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
-	return &dnsIPCServer{pipeName: sondnsPipeName, instanceID: id, ring: ring, proxy: proxy, stop: make(chan struct{}), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &dnsIPCServer{pipeName: sondnsPipeName, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), ring: ring, proxy: proxy, ctx: ctx, cancel: cancel, done: make(chan struct{}), active: make(map[windows.Handle]*os.File)}
 }
 
-func (s *dnsIPCServer) start() { go s.serve() }
-
-func (s *dnsIPCServer) serve() {
-	defer close(s.done)
-	sd, _ := windows.SecurityDescriptorFromString("D:P(A;;GA;;;IU)")
-	name, _ := windows.UTF16PtrFromString(s.pipeName)
+func (s *dnsIPCServer) start() (err error) {
+	defer func() {
+		if err != nil {
+			s.cancel()
+			close(s.done)
+		}
+	}()
+	token := windows.GetCurrentProcessToken()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("IPC server identity: %w", err)
+	}
+	s.ownerSID = user.User.Sid.String()
+	s.elevated = token.IsElevated()
+	acl := "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x100083;;;AU)"
+	if !s.elevated {
+		// An unelevated isolated preview belongs to its own user. Elevated
+		// runtimes only grant server-creation rights to administrators/SYSTEM.
+		acl += "(A;;GA;;;" + s.ownerSID + ")"
+	}
+	// The service runs at high/System integrity; normal desktop clients must
+	// still be able to send read requests. Authorization gates mutations.
+	acl += "S:(ML;;NW;;;ME)"
+	sd, err := windows.SecurityDescriptorFromString(acl)
+	if err != nil {
+		return fmt.Errorf("IPC security descriptor: %w", err)
+	}
+	name, err := windows.UTF16PtrFromString(s.pipeName)
+	if err != nil {
+		return err
+	}
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	first, err := createDNSPipe(name, sa, windows.FILE_FLAG_FIRST_PIPE_INSTANCE)
+	if err != nil {
+		return fmt.Errorf("reserve IPC pipe: %w", err)
+	}
+	var reservation windows.Handle
+	process := windows.CurrentProcess()
+	if err = windows.DuplicateHandle(process, first, process, &reservation, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		_ = windows.CloseHandle(first)
+		return fmt.Errorf("retain IPC reservation: %w", err)
+	}
+	go s.serve(first, reservation, name, sa)
+	return nil
+}
+
+func createDNSPipe(name *uint16, sa *windows.SecurityAttributes, flags uint32) (windows.Handle, error) {
+	return windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_OVERLAPPED|flags, windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS, windows.PIPE_UNLIMITED_INSTANCES, 64*1024, 64*1024, 1000, sa)
+}
+
+func (s *dnsIPCServer) serve(first, reservation windows.Handle, name *uint16, sa *windows.SecurityAttributes) {
+	var handlers sync.WaitGroup
+	defer func() {
+		if first != 0 {
+			_ = windows.CloseHandle(first)
+		}
+		handlers.Wait()
+		// Keep the first instance alive for the entire server lifetime, even
+		// between clients, so another process cannot take over the pipe name.
+		_ = windows.CloseHandle(reservation)
+		close(s.done)
+	}()
+	slots := make(chan struct{}, ipcMaxHandlers)
 	for {
 		select {
-		case <-s.stop:
+		case slots <- struct{}{}:
+		case <-s.ctx.Done():
 			return
-		default:
 		}
-		h, err := windows.CreateNamedPipe(name,
-			windows.PIPE_ACCESS_DUPLEX,
-			windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
-			windows.PIPE_UNLIMITED_INSTANCES, 64*1024, 64*1024, 1000, sa)
+		if s.ctx.Err() != nil {
+			return
+		}
+		h := first
+		first = 0
+		var err error
+		if h == 0 {
+			h, err = createDNSPipe(name, sa, 0)
+		}
 		if err != nil {
-			if errors.Is(err, windows.ERROR_ACCESS_DENIED) { // another instance owns the pipe
+			<-slots
+			if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 				return
 			}
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 			continue
 		}
 		s.mu.Lock()
-		s.active = h
+		s.active[h] = nil
 		s.mu.Unlock()
-		err = windows.ConnectNamedPipe(h, nil)
-		if err != nil && !errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
-			_ = windows.CloseHandle(h)
+		err = s.accept(h)
+		if err != nil || s.ctx.Err() != nil {
 			s.mu.Lock()
-			s.active = 0
+			delete(s.active, h)
 			s.mu.Unlock()
+			_ = windows.CloseHandle(h)
+			<-slots
 			continue
 		}
-		s.handle(h)
+		f := os.NewFile(uintptr(h), "SonDNS IPC")
+		if f == nil {
+			s.mu.Lock()
+			delete(s.active, h)
+			s.mu.Unlock()
+			_ = windows.CloseHandle(h)
+			<-slots
+			continue
+		}
 		s.mu.Lock()
-		s.active = 0
+		s.active[h] = f
 		s.mu.Unlock()
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			defer func() { s.mu.Lock(); delete(s.active, h); s.mu.Unlock(); _ = f.Close(); <-slots }()
+			if s.ctx.Err() == nil {
+				s.handle(f)
+			}
+		}()
 	}
 }
 
-func (s *dnsIPCServer) handle(h windows.Handle) {
-	f := os.NewFile(uintptr(h), "SonDNS IPC")
-	if f == nil {
-		_ = windows.CloseHandle(h)
+func (s *dnsIPCServer) accept(h windows.Handle) error {
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(event)
+	overlapped := windows.Overlapped{HEvent: event}
+	err = windows.ConnectNamedPipe(h, &overlapped)
+	if err == nil || errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
+		return nil
+	}
+	if !errors.Is(err, windows.ERROR_IO_PENDING) {
+		return err
+	}
+	for {
+		if s.ctx.Err() != nil {
+			// Complete the pending connect with a local peer instead of cancelling
+			// an unconnected pipe: CancelIoEx can itself block in Windows here.
+			name, nameErr := windows.UTF16PtrFromString(s.pipeName)
+			if nameErr == nil {
+				peer, peerErr := windows.CreateFile(name, ipcClientAccess, 0, nil, windows.OPEN_EXISTING, ipcClientFlags, 0)
+				if peerErr == nil {
+					_ = windows.CloseHandle(peer)
+				}
+			}
+		}
+		state, err := windows.WaitForSingleObject(event, 100)
+		if err != nil {
+			_ = windows.CancelIoEx(h, &overlapped)
+			var n uint32
+			_ = windows.GetOverlappedResult(h, &overlapped, &n, true)
+			return err
+		}
+		if state == windows.WAIT_OBJECT_0 {
+			var n uint32
+			return windows.GetOverlappedResult(h, &overlapped, &n, false)
+		}
+	}
+}
+
+func (s *dnsIPCServer) handle(f *os.File) {
+	if err := f.SetReadDeadline(time.Now().Add(ipcIOTimeout)); err != nil {
 		return
 	}
-	defer f.Close()
-	reader := bufio.NewReaderSize(f, 64*1024)
-	line, err := reader.ReadBytes('\n')
+	// ReadSlice is bounded by the buffer; ReadBytes would grow without a bound.
+	line, err := bufio.NewReaderSize(f, ipcMaxRequestBytes).ReadSlice('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return
 	}
-	var req dnsIPCRequest
-	if json.Unmarshal(line, &req) != nil {
-		writeIPC(f, dnsIPCResponse{Error: "invalid request"})
+	if len(line) == 0 {
 		return
 	}
-	_ = writeIPC(f, s.respond(req))
+	_ = f.SetReadDeadline(time.Time{})
+	var req dnsIPCRequest
+	var resp dnsIPCResponse
+	if json.Unmarshal(line, &req) != nil {
+		resp = dnsIPCResponse{Error: "invalid request", SchemaVersion: 2}
+	} else if ipcRequiresAuthorization(req.Op) && !s.authorizedFile(f) {
+		resp = dnsIPCResponse{Error: "Administrator permission is required for this operation", SchemaVersion: 2, InstanceID: s.instanceID}
+	} else {
+		resp = s.respond(req)
+	}
+	if err := f.SetWriteDeadline(time.Now().Add(ipcIOTimeout)); err == nil {
+		_ = writeIPC(f, resp)
+	}
+}
+
+func ipcRequiresAuthorization(op string) bool {
+	switch strings.ToLower(strings.TrimSpace(op)) {
+	case "set_upstream", "clear_log":
+		return true
+	default:
+		return false
+	}
+}
+
+var impersonateDNSPipeClient = windows.NewLazySystemDLL("advapi32.dll").NewProc("ImpersonateNamedPipeClient")
+
+func (s *dnsIPCServer) authorizedFile(f *os.File) bool {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	authorized := false
+	err = conn.Control(func(handle uintptr) { authorized = s.authorizedClient(windows.Handle(handle)) })
+	return err == nil && authorized
+}
+
+func (s *dnsIPCServer) authorizedClient(pipe windows.Handle) bool {
+	// Authenticate the token attached to the pipe, not a PID or data claimed
+	// by the caller. Never run resolver/configuration code while impersonating.
+	runtime.LockOSThread()
+	impersonating := false
+	defer func() {
+		if impersonating {
+			if err := windows.RevertToSelf(); err != nil {
+				// A thread with an unknown identity must never return to Go's pool.
+				panic(fmt.Sprintf("IPC RevertToSelf failed: %v", err))
+			}
+		}
+		runtime.UnlockOSThread()
+	}()
+	ok, _, _ := impersonateDNSPipeClient.Call(uintptr(pipe))
+	if ok == 0 {
+		return false
+	}
+	impersonating = true
+	var token windows.Token
+	if err := windows.OpenThreadToken(windows.CurrentThread(), windows.TOKEN_QUERY, true, &token); err != nil {
+		return false
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return false
+	}
+	if user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
+		return true
+	}
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return false
+	}
+	admin, err := token.IsMember(admins)
+	if err == nil && admin && token.IsElevated() {
+		return true
+	}
+	return !s.elevated && user.User.Sid.String() == s.ownerSID
 }
 
 func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
 	resp := dnsIPCResponse{SchemaVersion: 2}
 	switch strings.ToLower(strings.TrimSpace(req.Op)) {
+	case "state":
+		if p, ok := s.proxy.(interface{ RuntimeState() any }); ok {
+			resp.State = p.RuntimeState()
+			resp.OK = true
+		} else {
+			resp.Error = "runtime state is unavailable"
+		}
 	case "snapshot":
 		resp.OK = true
 		curVer := s.ring.Version()
@@ -138,7 +355,7 @@ func (s *dnsIPCServer) respond(req dnsIPCRequest) dnsIPCResponse {
 			resp.Error = "proxy unavailable"
 		} else if len(req.Upstreams) == 0 {
 			resp.Error = "no upstreams provided"
-		} else if err := s.proxy.SetUpstreams(req.Upstreams); err != nil {
+		} else if err := s.proxy.SetUpstreams(s.ctx, req.Upstreams); err != nil {
 			resp.Error = err.Error()
 		} else {
 			resp.OK = true
@@ -161,47 +378,42 @@ func writeIPC(f *os.File, v dnsIPCResponse) error {
 }
 
 func (s *dnsIPCServer) close() {
-	select {
-	case <-s.stop:
-		return
-	default:
-		close(s.stop)
-	}
+	s.cancel()
 	s.mu.Lock()
-	h := s.active
-	s.active = 0
+	for _, f := range s.active {
+		if f != nil {
+			_ = f.Close()
+		}
+		// accept owns and wakes its OVERLAPPED connect after observing ctx.
+		// Do not race its pending connect with another cancellation here.
+	}
 	s.mu.Unlock()
-	if h != 0 && h != windows.InvalidHandle {
-		_ = windows.CancelIoEx(h, nil)
-		_ = windows.CloseHandle(h)
-	}
-	name, _ := windows.UTF16PtrFromString(s.pipeName)
-	hWake, _ := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
-	if hWake != 0 && hWake != windows.InvalidHandle {
-		_ = windows.CloseHandle(hWake)
-	}
-	select {
-	case <-s.done:
-	case <-time.After(500 * time.Millisecond):
-	}
+	<-s.done
 }
+
+// A rejection is distinct from a connection failure or an uncertain timeout.
+type ipcResponseError struct{ message string }
+
+func (e *ipcResponseError) Error() string { return e.message }
 
 func callDNSIPC(req dnsIPCRequest) (dnsIPCResponse, error) {
 	return callDNSIPCAt(sondnsPipeName, req)
 }
 
 func callDNSIPCAt(pipeName string, req dnsIPCRequest) (dnsIPCResponse, error) {
-	name, _ := windows.UTF16PtrFromString(pipeName)
+	name, err := windows.UTF16PtrFromString(pipeName)
+	if err != nil {
+		return dnsIPCResponse{}, err
+	}
 	var h windows.Handle
-	var err error
 	deadline := time.Now().Add(1200 * time.Millisecond)
 	for {
-		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OVERLAPPED, 0)
+		h, err = windows.CreateFile(name, ipcClientAccess, 0, nil, windows.OPEN_EXISTING, ipcClientFlags, 0)
 		if err == nil {
 			break
 		}
 		if !errors.Is(err, windows.ERROR_PIPE_BUSY) && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || time.Now().After(deadline) {
-			return dnsIPCResponse{}, err
+			return dnsIPCResponse{}, fmt.Errorf("open IPC pipe: %w", err)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
@@ -214,18 +426,27 @@ func callDNSIPCAt(pipeName string, req dnsIPCRequest) (dnsIPCResponse, error) {
 	// Connection timeout alone does not bound a stalled server's reply. An
 	// overlapped pipe lets Go cancel I/O when this deadline expires.
 	timeout := 3 * time.Second
-	if req.Op == "set_upstream" {
+	if strings.EqualFold(strings.TrimSpace(req.Op), "set_upstream") {
 		timeout = 15 * time.Second
 	}
 	if err = f.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return dnsIPCResponse{}, err
 	}
-	b, _ := json.Marshal(req)
+	b, err := json.Marshal(req)
+	if err != nil {
+		return dnsIPCResponse{}, err
+	}
 	b = append(b, '\n')
+	if len(b) > ipcMaxRequestBytes {
+		return dnsIPCResponse{}, errors.New("IPC request exceeds size limit")
+	}
 	if _, err = f.Write(b); err != nil {
 		return dnsIPCResponse{}, err
 	}
-	line, err := bufio.NewReaderSize(f, 64*1024).ReadBytes('\n')
+	line, err := bufio.NewReaderSize(io.LimitReader(f, ipcMaxResponseBytes+1), 64*1024).ReadBytes('\n')
+	if len(line) > ipcMaxResponseBytes {
+		return dnsIPCResponse{}, errors.New("IPC response exceeds size limit")
+	}
 	if err != nil {
 		return dnsIPCResponse{}, err
 	}
@@ -234,7 +455,7 @@ func callDNSIPCAt(pipeName string, req dnsIPCRequest) (dnsIPCResponse, error) {
 		return dnsIPCResponse{}, err
 	}
 	if !resp.OK {
-		return resp, errors.New(resp.Error)
+		return resp, &ipcResponseError{message: resp.Error}
 	}
 	return resp, nil
 }

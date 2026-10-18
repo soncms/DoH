@@ -6,6 +6,10 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -29,13 +33,37 @@ func TestServiceStateTransitions(t *testing.T) {
 	}
 }
 
+func TestServiceMutationRejectsAnotherInstallation(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := &testServiceConfig{value: mgr.Config{BinaryPathName: windows.ComposeCommandLine([]string{exe, "run"})}}
+	if err := requireThisService(current); err != nil {
+		t.Fatalf("own service rejected: %v", err)
+	}
+	other := &testServiceConfig{value: mgr.Config{BinaryPathName: windows.ComposeCommandLine([]string{filepath.Join(t.TempDir(), "SonDNS.exe"), "run"})}}
+	if err := requireThisService(other); err == nil {
+		t.Fatal("service belonging to another portable folder was accepted")
+	}
+}
+
 type testServiceConfig struct {
 	value   mgr.Config
 	updates int
 }
 
-func (s *testServiceConfig) Config() (mgr.Config, error)     { return s.value, nil }
-func (s *testServiceConfig) UpdateConfig(c mgr.Config) error { s.value = c; s.updates++; return nil }
+func (s *testServiceConfig) Config() (mgr.Config, error) { return cloneServiceConfig(s.value), nil }
+func (s *testServiceConfig) SetStartupBase(start uint32, dependencies []string) error {
+	s.value.StartType, s.value.Dependencies = start, append([]string(nil), dependencies...)
+	s.updates++
+	return nil
+}
+func (s *testServiceConfig) SetDelayedAutoStart(enable bool) error {
+	s.value.DelayedAutoStart = enable
+	s.updates++
+	return nil
+}
 func TestServiceStartupUpdatesPreserveOtherConfig(t *testing.T) {
 	s := &testServiceConfig{value: mgr.Config{DisplayName: "SonDNS", BinaryPathName: "app.exe run", StartType: windows.SERVICE_DEMAND_START}}
 	if err := updateServiceStartup(s, true); err != nil {
@@ -51,5 +79,45 @@ func TestServiceStartupUpdatesPreserveOtherConfig(t *testing.T) {
 	_ = updateServiceStartup(s, false)
 	if s.value.StartType != windows.SERVICE_DEMAND_START || s.updates != 2 {
 		t.Fatal("manual mode not applied")
+	}
+}
+
+func TestServiceStartupRollbackPreservesConcurrentConfiguration(t *testing.T) {
+	previous := mgr.Config{
+		DisplayName: "SonDNS", BinaryPathName: `F:\SonDNS\SonDNS.exe run`,
+		StartType: windows.SERVICE_DISABLED, DelayedAutoStart: true,
+		Dependencies: []string{"Tcpip"}, Description: "original description",
+	}
+	for _, scenario := range []string{"unchanged", "start_type", "delayed_start", "dependencies", "binary", "description"} {
+		t.Run(scenario, func(t *testing.T) {
+			s := &testServiceConfig{value: cloneServiceConfig(previous)}
+			change, err := applyServiceStartupChange(s, true)
+			if err != nil || change == nil {
+				t.Fatalf("apply startup: %v", err)
+			}
+			current := cloneServiceConfig(s.value)
+			switch scenario {
+			case "start_type":
+				current.StartType = windows.SERVICE_DEMAND_START
+			case "delayed_start":
+				current.DelayedAutoStart = true
+			case "dependencies":
+				current.Dependencies = []string{"OtherDependency"}
+			case "binary":
+				current.BinaryPathName = `F:\OtherFolder\SonDNS.exe run`
+			case "description":
+				current.Description = "changed by another administrator"
+			}
+			s.value = current
+			s.updates = 0
+			err = change.rollback(s)
+			if scenario == "unchanged" {
+				if err != nil || s.updates != 2 || !reflect.DeepEqual(s.value, previous) {
+					t.Fatalf("prior SCM configuration was not restored: %+v %v", s.value, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "changed concurrently") || s.updates != 0 || !reflect.DeepEqual(s.value, current) {
+				t.Fatalf("rollback overwrote a concurrent SCM change: %+v %v", s.value, err)
+			}
+		})
 	}
 }

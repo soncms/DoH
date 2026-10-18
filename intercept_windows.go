@@ -7,11 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/miekg/dns"
@@ -29,6 +27,12 @@ type winDivertAddress struct {
 	Network   [64]byte
 }
 
+// Only handle/scalar operations use this interface. Buffer syscalls stay on
+// concrete LazyProc methods so Go preserves their uintptr escape annotations.
+type winDivertHandleProc interface {
+	Call(...uintptr) (uintptr, uintptr, error)
+}
+
 // Interceptor answers outbound IPv4/IPv6 UDP DNS directly through the DoH
 // resolver. It preserves the requested server address in the reply, so no
 // adapter DNS setting or port-53 listener needs to be changed.
@@ -37,8 +41,8 @@ type Interceptor struct {
 	recv     *windows.LazyProc
 	send     *windows.LazyProc
 	checksum *windows.LazyProc
-	shutdown *windows.LazyProc
-	close    *windows.LazyProc
+	shutdown winDivertHandleProc
+	close    winDivertHandleProc
 	resolver *Resolver
 	log      *log.Logger
 	ctx      context.Context
@@ -55,13 +59,14 @@ func NewInterceptor(c Config, resolver *Resolver, logger *log.Logger) (*Intercep
 	}
 	dll := windows.NewLazyDLL(filepath.Join(dir, "WinDivert.dll"))
 	open := dll.NewProc("WinDivertOpen")
+	recv, send := dll.NewProc("WinDivertRecv"), dll.NewProc("WinDivertSend")
+	checksum := dll.NewProc("WinDivertHelperCalcChecksums")
+	shutdown, close := dll.NewProc("WinDivertShutdown"), dll.NewProc("WinDivertClose")
 	i := &Interceptor{
-		recv: dll.NewProc("WinDivertRecv"), send: dll.NewProc("WinDivertSend"),
-		checksum: dll.NewProc("WinDivertHelperCalcChecksums"),
-		shutdown: dll.NewProc("WinDivertShutdown"), close: dll.NewProc("WinDivertClose"),
+		recv: recv, send: send, checksum: checksum, shutdown: shutdown, close: close,
 		resolver: resolver, log: logger, workers: make(chan struct{}, 1024),
 	}
-	for _, proc := range []*windows.LazyProc{open, i.recv, i.send, i.checksum, i.shutdown, i.close} {
+	for _, proc := range []*windows.LazyProc{open, recv, send, checksum, shutdown, close} {
 		if err := proc.Find(); err != nil {
 			return nil, fmt.Errorf("load WinDivert 2.x: %w", err)
 		}
@@ -199,54 +204,17 @@ func (i *Interceptor) sendPacket(raw []byte, addr *winDivertAddress) error {
 	return nil
 }
 
-func (i *Interceptor) Shutdown() {
-	if i == nil {
-		return
+func resolveWinDivertDir(logger *log.Logger) (string, error) {
+	if consoleBuild {
+		return portableRuntimeDir()
 	}
-	i.stopOnce.Do(func() {
-		i.cancel()
-		if i.handle != 0 && i.handle != windows.InvalidHandle {
-			_ = windows.CancelIoEx(i.handle, nil)
-			if i.shutdown != nil {
-				_, _, _ = i.shutdown.Call(uintptr(i.handle), 3) // WINDIVERT_SHUTDOWN_BOTH
-			}
-			go func() {
-				if conn, err := net.Dial("udp", "127.0.0.1:53"); err == nil {
-					_, _ = conn.Write([]byte{0})
-					_ = conn.Close()
-				}
-				if conn, err := net.Dial("udp", "1.1.1.1:53"); err == nil {
-					_, _ = conn.Write([]byte{0})
-					_ = conn.Close()
-				}
-			}()
-			if i.close != nil {
-				_, _, _ = i.close.Call(uintptr(i.handle))
-			}
-		}
-		done := make(chan struct{})
-		go func() {
-			i.wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(1 * time.Second):
-			if i.log != nil {
-				i.log.Printf("WinDivert shutdown wait timed out")
-			}
-		}
-	})
+	return extractEmbeddedWinDivertAt(portableRoot(), logger)
 }
 
-func resolveWinDivertDir(logger *log.Logger) (string, error) {
-	progData := os.Getenv("ProgramData")
-	if progData == "" {
-		return "", errors.New("ProgramData is unavailable; refusing to extract WinDivert runtime")
-	}
-	appDir := filepath.Join(progData, "SonDNS")
+func extractEmbeddedWinDivertAt(installRoot string, logger *log.Logger) (string, error) {
+	appDir := embeddedRuntimePath(installRoot)
 	if len(embeddedWinDivertDLL) > 0 && len(embeddedWinDivertSYS) > 0 {
-		if err := os.MkdirAll(appDir, 0o755); err != nil {
+		if err := ensurePortableDirectory(installRoot, appDir); err != nil {
 			return "", err
 		}
 		dllPath := filepath.Join(appDir, "WinDivert.dll")
@@ -261,18 +229,9 @@ func resolveWinDivertDir(logger *log.Logger) (string, error) {
 		}
 		return appDir, nil
 	}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if hasWinDivertFiles(exeDir) {
-			if err := verifyWinDivertFiles(exeDir); err != nil {
-				return "", fmt.Errorf("verify WinDivert in executable directory: %w", err)
-			}
-			return exeDir, nil
-		}
-	}
 	if hasWinDivertFiles(appDir) {
 		if err := verifyWinDivertFiles(appDir); err != nil {
-			return "", fmt.Errorf("verify WinDivert in ProgramData: %w", err)
+			return "", fmt.Errorf("verify portable WinDivert: %w", err)
 		}
 		return appDir, nil
 	}

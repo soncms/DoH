@@ -72,6 +72,9 @@ func cleanupWinDivertDriver() error {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+		if st.State != svc.Stopped {
+			return errors.New("WinDivert driver has not stopped; leaving its service registered")
+		}
 	}
 	if err := s.Delete(); err != nil && !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) && !errors.Is(err, windows.ERROR_SERVICE_MARKED_FOR_DELETE) {
 		return err
@@ -81,18 +84,13 @@ func cleanupWinDivertDriver() error {
 
 func isOurWinDivertPath(servicePath, exe string) bool {
 	clean := filepath.Clean(servicePath)
+	if insidePortableRuntime(clean) {
+		return true
+	}
 	if exe != "" {
 		if strings.EqualFold(clean, filepath.Clean(filepath.Join(filepath.Dir(exe), "WinDivert64.sys"))) {
 			return true
 		}
 	}
-	progData := os.Getenv("ProgramData")
-	if progData == "" {
-		progData = "."
-	}
-	if strings.EqualFold(clean, filepath.Clean(filepath.Join(progData, "SonDNS", "WinDivert64.sys"))) {
-		return true
-	}
 	return false
 }
-

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -91,19 +92,7 @@ func writeEmbeddedAsset(logger *log.Logger, name, path string, data []byte, mode
 	if err := verifyRuntimeAsset(name, data); err != nil {
 		return fmt.Errorf("verify embedded %s: %w", name, err)
 	}
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		if err := verifyRuntimeAsset(name, existing); err != nil {
-			return fmt.Errorf("verify existing %s: %w", name, err)
-		}
-		if logger != nil {
-			logger.Printf("asset verified: %s sha256=%s", name, runtimeAssetHash(existing))
-		}
-		return nil
-	}
-	if err := os.WriteFile(path, data, mode); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, mode); err != nil {
+	if err := writePortableFile(path, data, mode); err != nil {
 		return err
 	}
 	if err := verifyRuntimeAssetFile(name, path); err != nil {
@@ -113,4 +102,34 @@ func writeEmbeddedAsset(logger *log.Logger, name, path string, data []byte, mode
 		logger.Printf("asset verified: %s sha256=%s", name, runtimeAssetHash(data))
 	}
 	return nil
+}
+
+// The caller validates the parent directories against the portable root first.
+// Write beside the destination, so extraction never uses the user's TEMP.
+func writePortableFile(path string, data []byte, mode os.FileMode) error {
+	if err := rejectPortableReparse(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".sondns-asset-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = os.Chmod(f.Name(), mode); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

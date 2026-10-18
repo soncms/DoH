@@ -27,6 +27,6 @@
       "bootstrap": ["45.90.28.0:443", "45.90.30.0:443", "[2a07:a8c0::]:443", "[2a07:a8c1::]:443"]
     }
   ],
-  "log_file": "C:\\ProgramData\\SonDNS\\sondns.log"
+  "log_file": "data/sondns.log"
 }
 

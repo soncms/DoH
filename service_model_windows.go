@@ -4,9 +4,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 type serviceSnapshot struct {
@@ -50,6 +54,10 @@ func (s serviceSnapshot) text() string {
 // Monitoring uses query rights only, so opening a GUI without elevation can
 // read the real state instead of misreporting Access Denied as Not Installed.
 func openSonDNSService(access uint32) (*mgr.Service, error) {
+	mutates := access&(windows.SERVICE_START|windows.SERVICE_STOP|windows.SERVICE_CHANGE_CONFIG|windows.DELETE) != 0
+	if mutates {
+		access |= windows.SERVICE_QUERY_CONFIG
+	}
 	h, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return nil, err
@@ -63,7 +71,29 @@ func openSonDNSService(access uint32) (*mgr.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &mgr.Service{Name: serviceName, Handle: sh}, nil
+	s := &mgr.Service{Name: serviceName, Handle: sh}
+	if mutates {
+		if err := requireThisService(s); err != nil {
+			s.Close()
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+func requireThisService(s serviceConfigurer) error {
+	c, err := s.Config()
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(filepath.Clean(serviceBinaryPath(c.BinaryPathName)), filepath.Clean(exe)) {
+		return fmt.Errorf("SonDNS service belongs to another folder: %s; manage it from its own SonDNS.exe", c.BinaryPathName)
+	}
+	return nil
 }
 
 func queryServiceSnapshot() (serviceSnapshot, error) {
@@ -86,6 +116,19 @@ func queryServiceSnapshot() (serviceSnapshot, error) {
 	return serviceSnapshot{Exists: true, State: st.State, StartType: c.StartType}, nil
 }
 
+func queryThisServiceSnapshot() (serviceSnapshot, error) {
+	state, err := queryServiceSnapshot()
+	if err != nil || !state.Exists {
+		return state, err
+	}
+	s, err := openSonDNSService(windows.SERVICE_QUERY_CONFIG)
+	if err != nil {
+		return state, err
+	}
+	defer s.Close()
+	return state, requireThisService(s)
+}
+
 func serviceStartType(auto bool) uint32 {
 	if auto {
 		return windows.SERVICE_AUTO_START
@@ -95,25 +138,6 @@ func serviceStartType(auto bool) uint32 {
 
 type serviceConfigurer interface {
 	Config() (mgr.Config, error)
-	UpdateConfig(mgr.Config) error
-}
-
-func updateServiceStartup(s serviceConfigurer, auto bool) error {
-	c, err := s.Config()
-	if err != nil {
-		return err
-	}
-	start := serviceStartType(auto)
-	hasDeps := len(c.Dependencies) > 0
-	if c.StartType == start && !c.DelayedAutoStart && hasDeps {
-		return nil
-	}
-	c.StartType = start
-	c.DelayedAutoStart = false
-	if !hasDeps {
-		c.Dependencies = []string{"Tcpip", "Dnscache"}
-	}
-	return s.UpdateConfig(c)
 }
 
 func setServiceAutoStart(auto bool) error {
@@ -122,7 +146,12 @@ func setServiceAutoStart(auto bool) error {
 		return err
 	}
 	defer s.Close()
-	return updateServiceStartup(s, auto)
+	if auto && !consoleBuild {
+		if err := validatePortableServiceFolder(portableRoot()); err != nil {
+			return err
+		}
+	}
+	return updateServiceStartup(scmStartupController{s}, auto)
 }
 
 func startInstalledService() error {
@@ -131,5 +160,10 @@ func startInstalledService() error {
 		return err
 	}
 	defer s.Close()
+	if !consoleBuild {
+		if err := validatePortableServiceFolder(portableRoot()); err != nil {
+			return err
+		}
+	}
 	return s.Start()
 }

@@ -2,19 +2,22 @@
 
 package main
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 type dnsIPCServer struct{}
 
 type dnsEngineProxy interface {
-	SetUpstreams([]Upstream) error
+	SetUpstreams(context.Context, []Upstream) error
 }
 
 func newDNSIPCServer(*DNSRequestRing, dnsEngineProxy) *dnsIPCServer {
 	return &dnsIPCServer{}
 }
-func (*dnsIPCServer) start() {}
-func (*dnsIPCServer) close() {}
+func (*dnsIPCServer) start() error { return nil }
+func (*dnsIPCServer) close()       {}
 
 type dnsIPCRequest struct {
 	Op        string     `json:"op"`

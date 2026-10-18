@@ -28,11 +28,9 @@ func main() {
 	}
 	isService, _ := svc.IsWindowsService()
 	if isService {
-		configPath := defaultConfigPath()
-		for _, arg := range os.Args[1:] {
-			if strings.HasPrefix(arg, "--config=") {
-				configPath = strings.TrimPrefix(arg, "--config=")
-			}
+		configPath, err := serviceRunConfigPath(portableRoot(), os.Args[1:])
+		if err != nil {
+			os.Exit(1)
 		}
 		if err := svc.Run(serviceName, &windowsService{configPath: configPath}); err != nil {
 			os.Exit(1)
@@ -40,21 +38,38 @@ func main() {
 		return
 	}
 	if err := cli(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		reportStartupError(err)
 		os.Exit(1)
 	}
 }
 
 func cli(args []string) error {
+	if consoleBuild {
+		return consoleCLI(args)
+	}
 	if len(args) == 0 {
 		return runGUI()
 	}
 	switch args[0] {
+	case "version", "--version":
+		fmt.Println("SonDNS", buildVersion, "(portable GUI, embedded runtime)")
+		return nil
+	case "verify":
+		root, err := ensureEmbeddedZapret2(nil)
+		if err != nil {
+			return err
+		}
+		fmt.Println("Embedded runtime verified:", root)
+		return nil
 	case "gui":
 		fs := flag.NewFlagSet("gui", flag.ContinueOnError)
-		config := fs.String("config", defaultConfigPath(), "path to JSON config")
+		config := fs.String("config", "", "path to JSON config (defaults to the owned service configuration)")
 		tray := fs.Bool("tray", false, "start minimized in system tray")
+		waitFor := fs.Uint("wait-for", 0, "wait for the previous SonDNS window to exit")
 		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if err := waitForGUIHandoff(uint32(*waitFor)); err != nil {
 			return err
 		}
 		return runGUIWithConfigAndTray(*config, *tray)
@@ -71,7 +86,11 @@ func cli(args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return SaveConfig(*config, DefaultConfig())
+		path, err := portableConfigPath(portableRoot(), *config)
+		if err != nil {
+			return err
+		}
+		return savePortableConfig(path, DefaultConfig())
 	case "install":
 		return installService(args[1:])
 	case "uninstall":
@@ -87,9 +106,11 @@ func cli(args []string) error {
 }
 
 func usage() {
-	fmt.Println(`SonDNS - headless DNS-over-HTTPS resolver for Windows
+	fmt.Println(`SonDNS - portable encrypted DNS resolver for Windows
 
 Commands:
+	verify     extract/verify embedded runtime locally without starting drivers
+	version    show build version
   init       create a default JSON config
   run        run in the foreground
   install    install and start (service_auto_start controls startup)
@@ -98,20 +119,20 @@ Commands:
   status     show service status
 
 Examples:
-  SonDNS init --config C:\ProgramData\SonDNS\sondns.json
-  SonDNS install --config C:\ProgramData\SonDNS\sondns.json
-  SonDNS run --config .\sondns.json`)
+  SonDNS init
+  SonDNS install
+  SonDNS run --config data\sondns.json`)
 }
 
 func defaultConfigPath() string {
-	base := os.Getenv("ProgramData")
-	if base == "" {
-		base = "."
-	}
-	return filepath.Join(base, "SonDNS", "sondns.json")
+	return filepath.Join(portableRoot(), "data", "sondns.json")
 }
 
 func runForeground(path string) error {
+	path, err := portableConfigPath(portableRoot(), path)
+	if err != nil {
+		return err
+	}
 	c, err := LoadConfig(path)
 	if err != nil {
 		return err
@@ -127,7 +148,9 @@ func runForeground(path string) error {
 	}
 	defer func() {
 		shutdown()
-		_ = cleanupWinDivertDriver()
+		if err := cleanupWinDivertDriver(); err != nil {
+			logger.Printf("WinDivert cleanup incomplete: %v", err)
+		}
 	}()
 	logger.Printf("SonDNS running on %s (interception=%s)", c.Listen, c.Interception)
 	sig := make(chan os.Signal, 1)
@@ -144,7 +167,7 @@ func startRuntime(c Config, logger *log.Logger) (func(), error) {
 	if !acquired {
 		return nil, errors.New("another SonDNS runtime process is already running")
 	}
-	engine, resolver, err := NewDNSProxyEngine(c, logger)
+	engine, resolver, err := newRuntimeEngine(c, logger)
 	if err != nil {
 		instance.Close()
 		return nil, err
@@ -203,10 +226,18 @@ func startRuntime(c Config, logger *log.Logger) (func(), error) {
 }
 
 func newLogger(c Config) (*log.Logger, func(), error) {
+	return newLoggerAt(portableRoot(), c)
+}
+
+func newLoggerAt(root string, c Config) (*log.Logger, func(), error) {
 	if c.LogFile == "" {
 		return log.New(os.Stderr, "sondns: ", log.LstdFlags), func() {}, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(c.LogFile), 0o755); err != nil {
+	c.LogFile = filepath.Join(root, portableLogPath(c.LogFile))
+	if err := ensurePortableDirectory(root, filepath.Dir(c.LogFile)); err != nil {
+		return nil, nil, err
+	}
+	if err := rejectPortableReparse(c.LogFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, nil, err
 	}
 	f, err := os.OpenFile(c.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
@@ -220,6 +251,11 @@ type windowsService struct{ configPath string }
 
 func (d *windowsService) Execute(_ []string, req <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending, WaitHint: 15_000, CheckPoint: 1}
+	if !consoleBuild {
+		if err := validatePortableServiceFolder(portableRoot()); err != nil {
+			return true, 2
+		}
+	}
 	c, err := LoadConfig(d.configPath)
 	if err != nil {
 		return true, 1
@@ -251,8 +287,11 @@ func (d *windowsService) Execute(_ []string, req <-chan svc.ChangeRequest, statu
 		logger.Printf("service stopping: shutting down runtime...")
 		shutdown()
 		logger.Printf("service stopping: cleaning up WinDivert driver...")
-		_ = cleanupWinDivertDriver()
-		logger.Printf("service stopped successfully")
+		if err := cleanupWinDivertDriver(); err != nil {
+			logger.Printf("service stopped; WinDivert cleanup incomplete: %v", err)
+		} else {
+			logger.Printf("service stopped successfully")
+		}
 	}()
 	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	logger.Printf("service started and running")
@@ -274,6 +313,19 @@ func installService(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	config := fs.String("config", defaultConfigPath(), "path to JSON config")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	localConfig, err := portableConfigPath(portableRoot(), *config)
+	if err != nil {
+		return err
+	}
+	if !consoleBuild {
+		if err := validatePortableServiceFolder(portableRoot()); err != nil {
+			return fmt.Errorf("service folder is not protected; use Install in the GUI to create a secure portable copy: %w", err)
+		}
+	}
+	*config = localConfig
+	if err = ensurePortableDirectory(portableRoot(), filepath.Dir(localConfig)); err != nil {
 		return err
 	}
 	if _, err := os.Stat(*config); errors.Is(err, os.ErrNotExist) {
@@ -320,7 +372,9 @@ func installService(args []string) error {
 		return err
 	}
 	defer s.Close()
-	_ = syncGUIAutostart(settings.ServiceAutoStart)
+	if err := syncGUIAutostart(path, settings.ServiceAutoStart); err != nil {
+		return fmt.Errorf("service startup registration failed: %w", errors.Join(err, s.Delete()))
+	}
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("service installed but failed to start: %w", err)
 	}
@@ -339,17 +393,18 @@ func uninstallService() error {
 		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return err
 		}
-		_ = syncGUIAutostart(false)
-		if err := cleanupWinDivertDriver(); err != nil {
-			return err
-		}
+		trayErr := syncGUIAutostart("", false)
+		driverErr := cleanupWinDivertDriver()
 		exe, exeErr := os.Executable()
 		if exeErr != nil {
 			return exeErr
 		}
-		return purgeSonDNSInstall(exe)
+		return errors.Join(trayErr, driverErr, purgeSonDNSInstall(exe))
 	}
 	defer s.Close()
+	if err := requireThisService(s); err != nil {
+		return err
+	}
 	if cfg, configErr := s.Config(); configErr == nil {
 		serviceExe = serviceBinaryPath(cfg.BinaryPathName)
 	}
@@ -362,14 +417,12 @@ func uninstallService() error {
 	if err := s.Delete(); err != nil {
 		return err
 	}
-	_ = syncGUIAutostart(false)
-	if err := cleanupWinDivertDriver(); err != nil {
-		return err
-	}
+	trayErr := syncGUIAutostart("", false)
+	driverErr := cleanupWinDivertDriver()
 	if serviceExe == "" {
 		serviceExe, _ = os.Executable()
 	}
-	return purgeSonDNSInstall(serviceExe)
+	return errors.Join(trayErr, driverErr, purgeSonDNSInstall(serviceExe))
 }
 
 func serviceBinaryPath(commandLine string) string {
@@ -388,44 +441,9 @@ func serviceBinaryPath(commandLine string) string {
 	return ""
 }
 
-// purgeSonDNSInstall removes only data owned by this installation. The
-// executable, GUI and workspace source/dist files are intentionally kept so
-// the user can install the service again immediately.
+// Removing the service keeps the portable folder intact. Configuration, logs,
+// runtime and backups are user data; deleting them is a separate user action.
 func purgeSonDNSInstall(installedExe string) error {
-	base := strings.TrimSpace(os.Getenv("ProgramData"))
-	if base == "" {
-		return errors.New("ProgramData is unavailable; refusing to purge install files")
-	}
-	appDir := filepath.Join(base, "SonDNS")
-	if err := os.RemoveAll(appDir); err != nil {
-		return fmt.Errorf("remove %s: %w", appDir, err)
-	}
-	if installedExe == "" {
-		return nil
-	}
-	installedExe, err := filepath.Abs(installedExe)
-	if err != nil {
-		return err
-	}
-	if !strings.EqualFold(filepath.Base(installedExe), "SonDNS.exe") {
-		return nil
-	}
-	dir := filepath.Dir(installedExe)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, "SonDNS.exe.bak-") || strings.HasPrefix(name, "SonDNS.exe.backup-") || name == "SonDNS.exe~" {
-			if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -458,6 +476,14 @@ func restartService() error {
 		return err
 	}
 	defer s.Close()
+	if err := requireThisService(s); err != nil {
+		return err
+	}
+	if !consoleBuild {
+		if err := validatePortableServiceFolder(portableRoot()); err != nil {
+			return err // Leave the running service untouched on validation failure.
+		}
+	}
 	st, err := s.Query()
 	if err != nil {
 		return err
@@ -500,6 +526,9 @@ func stopService() error {
 		return err
 	}
 	defer s.Close()
+	if err := requireThisService(s); err != nil {
+		return err
+	}
 	st, err := s.Query()
 	if err != nil {
 		return err

@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"golang.org/x/sys/windows"
 	"io"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -18,10 +20,11 @@ const embeddedDPIBackend = "embedded-zapret2"
 
 // DPIBackend owns the lifecycle of the embedded winws2 engine or an explicitly
 // configured external-compatible engine. The embedded path is the default and
-// is extracted to ProgramData at runtime so the distributable remains one EXE.
+// is extracted beside the executable so the distributable remains one EXE.
 type DPIBackend struct {
 	cfg    DPIConfig
 	logger *log.Logger
+	env    []string
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -49,6 +52,11 @@ func (b *DPIBackend) Start() error {
 		b.logger.Printf("DPI backend unavailable: %v; continuing in fail-open mode", err)
 		return nil
 	}
+	b.env, err = portableHelperEnvironment(portableRoot())
+	if err != nil {
+		b.logger.Printf("DPI portable directories unavailable: %v; continuing in fail-open mode", err)
+		return nil
+	}
 	b.stop = make(chan struct{})
 	b.done = make(chan struct{})
 	go b.run(exe, args)
@@ -57,7 +65,13 @@ func (b *DPIBackend) Start() error {
 
 func (b *DPIBackend) command() (string, []string, error) {
 	if b.cfg.Backend == embeddedDPIBackend {
-		root, err := ensureEmbeddedZapret2(b.logger)
+		var root string
+		var err error
+		if consoleBuild {
+			root, err = portableRuntimeDir()
+		} else {
+			root, err = ensureEmbeddedZapret2(b.logger)
+		}
 		if err != nil {
 			return "", nil, err
 		}
@@ -78,7 +92,9 @@ func (b *DPIBackend) run(exe string, args []string) {
 	defer close(b.done)
 	for attempt := 0; ; attempt++ {
 		cmd := exec.Command(exe, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 		cmd.Dir = filepath.Dir(exe)
+		cmd.Env = b.env
 		cmd.Stdout = logWriter{logger: b.logger, prefix: "dpi: "}
 		cmd.Stderr = logWriter{logger: b.logger, prefix: "dpi: "}
 		b.mu.Lock()
@@ -88,7 +104,15 @@ func (b *DPIBackend) run(exe string, args []string) {
 		b.logger.Printf("starting DPI backend %q", exe)
 		err := cmd.Start()
 		if err == nil {
-			err = cmd.Wait()
+			closeJob, jobErr := attachHelperJob(cmd)
+			if jobErr != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				err = jobErr
+			} else {
+				err = cmd.Wait()
+				closeJob()
+			}
 		}
 		b.mu.Lock()
 		b.cmd = nil
@@ -139,14 +163,20 @@ func (b *DPIBackend) Shutdown() {
 }
 
 func ensureEmbeddedZapret2(logger *log.Logger) (string, error) {
-	base := os.Getenv("ProgramData")
-	if base == "" {
-		return "", errors.New("ProgramData is unavailable; refusing to extract DPI runtime")
+	return ensureEmbeddedZapret2At(portableRoot(), logger)
+}
+
+func ensureEmbeddedZapret2At(installRoot string, logger *log.Logger) (string, error) {
+	if err := ensurePortableNoticesAt(installRoot); err != nil {
+		return "", err
 	}
-	root := filepath.Join(base, "SonDNS")
+	root := embeddedRuntimePath(installRoot)
 	assetDir := filepath.Join(root, "zapret2")
+	if consoleBuild {
+		assetDir = root
+	}
 	for _, dir := range []string{root, filepath.Join(assetDir, "lua"), filepath.Join(assetDir, "windivert.filter")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := ensurePortableDirectory(installRoot, dir); err != nil {
 			return "", err
 		}
 	}
@@ -170,6 +200,9 @@ func ensureEmbeddedZapret2(logger *log.Logger) (string, error) {
 			return "", err
 		}
 	}
+	if _, err := extractEmbeddedWinDivertAt(installRoot, logger); err != nil {
+		return "", err
+	}
 	return root, nil
 }
 
@@ -178,6 +211,9 @@ func zapret2Arguments(root string, cfg DPIConfig) ([]string, error) {
 		return append([]string(nil), cfg.Arguments...), nil
 	}
 	assetDir := filepath.Join(root, "zapret2")
+	if consoleBuild {
+		assetDir = root
+	}
 	luaDir := filepath.Join(assetDir, "lua")
 	filterDir := filepath.Join(assetDir, "windivert.filter")
 	tcpCapture, tcpProfile := "80,443", "80,443"
@@ -245,7 +281,17 @@ func zapret2Hostlist(root, filename string, targets []string) (string, error) {
 	if len(lines) == 0 {
 		return "", nil
 	}
-	path := filepath.Join(root, "zapret2", filename)
+	listDir := filepath.Join(root, "zapret2")
+	if consoleBuild {
+		listDir = filepath.Join(portableRoot(), "data", "dpi")
+		if err := os.MkdirAll(listDir, 0o700); err != nil {
+			return "", err
+		}
+	}
+	path := filepath.Join(listDir, filename)
+	if err := rejectPortableReparse(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\r\n")+"\r\n"), 0o644); err != nil {
 		return "", err
 	}
@@ -264,6 +310,9 @@ func removeEmptyArgs(args []string) []string {
 
 func resolveDPIExecutable(configured string) string {
 	configured = strings.TrimSpace(configured)
+	if !consoleBuild {
+		return resolvePortableDPIExecutableAt(portableRoot(), configured)
+	}
 	if configured != "" {
 		if path, err := filepath.Abs(configured); err == nil {
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {

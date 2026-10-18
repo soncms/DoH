@@ -11,3 +11,8 @@ dist/
 !third_party/zapret2/*.exe
 !third_party/zapret2/*.dll
 
+# Repowise index, local reports, and API keys; keep shared settings.
+/.repowise/*
+!/.repowise/config.yaml
+/.repowise/.env
+

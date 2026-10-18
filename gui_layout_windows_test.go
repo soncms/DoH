@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && !console
 
 package main
 
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
@@ -57,6 +58,14 @@ func TestNativeLayout(t *testing.T) {
 	if got := (&dnsProviderModel{}).ItemCount(); got != 2 {
 		t.Fatalf("DNS provider menu item count = %d, want 2", got)
 	}
+	g.updateActionsForAdmin(false)
+	if g.dnsProvider.Enabled() || g.dpiMode.Enabled() || g.autoStart.Enabled() || g.clearButton.Enabled() || g.copyPortableAction.Enabled() || g.migrateAction.Enabled() {
+		t.Fatal("read-only window enabled a mutating control")
+	}
+	if !g.serviceButton.Enabled() || g.serviceButton.Text() != "Manage…" {
+		t.Fatal("read-only window cannot open an administrator session")
+	}
+	g.updateActions()
 	for i, want := range []string{ProviderSonCMS, ProviderNextDNS} {
 		if got := (&dnsProviderModel{}).Value(i); got != want {
 			t.Errorf("DNS provider menu item %d = %v, want %q", i, got, want)
@@ -179,8 +188,9 @@ func TestNativeLayout(t *testing.T) {
 			}
 		}
 		visit(mw)
-		if got, want := g.dnsProvider.Bounds().X, g.dpiMode.Bounds().X; got != want {
-			t.Errorf("selector alignment: DNS x=%d, DPI x=%d", got, want)
+		dnsBounds, dpiBounds := g.dnsProvider.Bounds(), g.dpiMode.Bounds()
+		if dnsBounds.Y != dpiBounds.Y || dnsBounds.Height != dpiBounds.Height || dnsBounds.X+dnsBounds.Width >= dpiBounds.X {
+			t.Errorf("selectors must share a row without overlapping: DNS=%+v DPI=%+v", dnsBounds, dpiBounds)
 		}
 		g.resizeLogColumns()
 		columnWidth := 0
@@ -407,4 +417,69 @@ func TestNativeLogViewport(t *testing.T) {
 		})
 	})
 	mw.Run()
+}
+
+func TestNativeConfigActionsIgnoreWhileBusy(t *testing.T) {
+	if os.Getenv("SONDNS_UI_TEST") != "1" {
+		t.Skip("set SONDNS_UI_TEST=1 on a Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	mw, err := walk.NewMainWindow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mw.Dispose()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := &guiState{mw: mw, ctx: ctx, cancel: cancel, config: DefaultConfig(), configPath: filepath.Join(t.TempDir(), "settings.json")}
+	if err = g.build(); err != nil {
+		t.Fatal(err)
+	}
+	g.setDNSProvider(g.config.CurrentProvider())
+	g.setDPIMode(g.config.DPI.Enabled, g.config.DPI.CaptureMode)
+	g.autoStart.CheckedChanged().Attach(g.toggleAutoStart)
+	g.busy = true
+	_ = g.dnsProvider.SetCurrentIndex(1)
+	_ = g.dpiMode.SetCurrentIndex(3)
+	g.autoStart.SetChecked(true)
+	if g.selectedDNSProvider() != ProviderSonCMS || g.dpiMode.CurrentIndex() != 0 || g.autoStart.Checked() {
+		t.Fatal("a second action changed controls while busy")
+	}
+	if _, err = os.Stat(g.configPath); !os.IsNotExist(err) {
+		t.Fatalf("busy action wrote config: %v", err)
+	}
+}
+
+func TestNativeCustomProviderSurvivesOtherSettings(t *testing.T) {
+	if os.Getenv("SONDNS_UI_TEST") != "1" {
+		t.Skip("set SONDNS_UI_TEST=1 on a Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	mw, err := walk.NewMainWindow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mw.Dispose()
+	c := DefaultConfig()
+	c.Upstreams = []Upstream{{URL: "https://dns.nextdns.io/my-own-profile", Bootstrap: []string{"192.0.2.1:443"}, DNSSEC: true}}
+	if err = c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g := &guiState{mw: mw, ctx: ctx, cancel: cancel, config: c}
+	if err = g.build(); err != nil {
+		t.Fatal(err)
+	}
+	g.setDNSProvider(c.CurrentProvider())
+	g.setDPIMode(true, "tcp")
+	if got := g.selectedDNSProvider(); got != ProviderCustom {
+		t.Fatalf("custom provider mislabelled as %s", got)
+	}
+	result, err := g.editedConfig()
+	if err != nil || !reflect.DeepEqual(result.Upstreams, c.Upstreams) {
+		t.Fatalf("other settings changed saved upstreams: %+v %v", result.Upstreams, err)
+	}
 }

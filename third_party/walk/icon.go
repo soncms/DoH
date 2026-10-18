@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build windows
 // +build windows
 
 package walk
@@ -17,16 +18,20 @@ import (
 	"github.com/lxn/win"
 )
 
+var loadIconWithScaleDown = windows.NewLazySystemDLL("comctl32.dll").NewProc("LoadIconWithScaleDown")
+
 // Icon is a bitmap that supports transparency and combining multiple
 // variants of an image in different resolutions.
 type Icon struct {
-	filePath  string
-	index     int
-	res       *uint16
-	dpi2hIcon map[int]win.HICON
-	size96dpi Size
-	isStock   bool
-	hasIndex  bool
+	filePath      string
+	index         int
+	res           *uint16
+	resourceID    uintptr
+	hasResourceID bool
+	dpi2hIcon     map[int]win.HICON
+	size96dpi     Size
+	isStock       bool
+	hasIndex      bool
 }
 
 type ExtractableIcon interface {
@@ -77,7 +82,7 @@ func IconShield() *Icon {
 }
 
 func stockIcon(id uintptr) *Icon {
-	return &Icon{res: win.MAKEINTRESOURCE(id), size96dpi: defaultIconSize(), isStock: true}
+	return &Icon{resourceID: id, hasResourceID: true, size96dpi: defaultIconSize(), isStock: true}
 }
 
 // NewIconFromFile returns a new Icon, using the specified icon image file and default size.
@@ -111,7 +116,13 @@ func NewIconFromResourceId(id int) (*Icon, error) {
 
 // NewIconFromResourceIdWithSize returns a new Icon of size size, using the specified icon resource.
 func NewIconFromResourceIdWithSize(id int, size Size) (*Icon, error) {
-	return newIconFromResource(win.MAKEINTRESOURCE(uintptr(id)), size)
+	if id < 0 || id > 65535 {
+		return nil, newError("invalid icon resource ID")
+	}
+	if size.Width == 0 || size.Height == 0 {
+		size = defaultIconSize()
+	}
+	return checkNewIcon(&Icon{resourceID: uintptr(id), hasResourceID: true, size96dpi: size})
 }
 
 func newIconFromResource(res *uint16, size Size) (*Icon, error) {
@@ -284,13 +295,15 @@ func (i *Icon) handleForDPIWithError(dpi int) (win.HICON, error) {
 			return 0, newError("SHDefExtractIcon")
 		}
 	} else {
-		hr := win.HICON(win.LoadIconWithScaleDown(
-			hInst,
-			name,
-			int32(size.Width),
-			int32(size.Height),
-			&hIcon))
-		if hr < 0 || hIcon == 0 {
+		// Integer resources are Win32 integer arguments, not Go pointers.
+		// Keep real UTF-16 pointers alive through the syscall expression.
+		var hr uintptr
+		if i.hasResourceID {
+			hr, _, _ = loadIconWithScaleDown.Call(uintptr(hInst), i.resourceID, uintptr(size.Width), uintptr(size.Height), uintptr(unsafe.Pointer(&hIcon)))
+		} else {
+			hr, _, _ = loadIconWithScaleDown.Call(uintptr(hInst), uintptr(unsafe.Pointer(name)), uintptr(size.Width), uintptr(size.Height), uintptr(unsafe.Pointer(&hIcon)))
+		}
+		if int32(hr) < 0 || hIcon == 0 {
 			return 0, lastError("LoadIconWithScaleDown")
 		}
 	}

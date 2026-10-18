@@ -1,3 +1,5 @@
+//go:build !console
+
 package main
 
 import (
@@ -9,12 +11,10 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"sync"
 	"time"
 
 	dnsproxy "github.com/AdguardTeam/dnsproxy/proxy"
 	proxyupstream "github.com/AdguardTeam/dnsproxy/upstream"
-	"github.com/ameshkov/dnsstamps"
 	"github.com/miekg/dns"
 )
 
@@ -26,11 +26,18 @@ type DNSProxyEngine struct {
 	ipc          *dnsIPCServer
 	timeout      time.Duration
 	bootstrapDNS []string
-	mu           sync.RWMutex
+	mu           upstreamMutex
 	started      bool
 }
 
-func prepareUpstreamsConfig(items []Upstream, bootstrapDNS []string, timeout time.Duration, logger *log.Logger) (*dnsproxy.UpstreamConfig, error) {
+func prepareUpstreamsConfig(ctx context.Context, items []Upstream, bootstrapDNS []string, timeout time.Duration, logger *log.Logger) (*dnsproxy.UpstreamConfig, error) {
+	items, err := normalizeUpstreams(items)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	lines := make([]string, 0, len(items))
 	bootstrap := bootstrapMap{}
 	for _, item := range items {
@@ -61,7 +68,7 @@ func prepareUpstreamsConfig(items []Upstream, bootstrapDNS []string, timeout tim
 			}
 		}
 		if len(bootstrap[host]) == 0 && host != "" {
-			ips, lookupErr := resolveHostViaBootstrapDNS(bootstrapDNS, host, timeout, logger)
+			ips, lookupErr := resolveHostViaBootstrapDNS(ctx, bootstrapDNS, host, timeout, logger)
 			if lookupErr != nil || len(ips) == 0 {
 				return nil, fmt.Errorf("bootstrap %s: %w", host, lookupErr)
 			}
@@ -74,10 +81,16 @@ func prepareUpstreamsConfig(items []Upstream, bootstrapDNS []string, timeout tim
 		upstreamTimeout = 3 * time.Second
 	}
 	options := &proxyupstream.Options{Logger: slog.New(slog.NewTextHandler(logWriter, nil)), Timeout: upstreamTimeout, Bootstrap: bootstrap}
-	return dnsproxy.ParseUpstreamsConfig(lines, options)
+	conf, err := dnsproxy.ParseUpstreamsConfig(lines, options)
+	if err == nil {
+		wrapDNSSECUpstreams(conf, anyDNSSEC(Config{Upstreams: items}))
+	}
+	return conf, err
 }
 
-func (e *DNSProxyEngine) SetUpstreams(items []Upstream) error {
+func (e *DNSProxyEngine) SetUpstreams(ctx context.Context, items []Upstream) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if e == nil || e.proxy == nil || e.upstreams == nil {
 		return errors.New("engine not initialized")
 	}
@@ -88,28 +101,42 @@ func (e *DNSProxyEngine) SetUpstreams(items []Upstream) error {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	newConf, err := prepareUpstreamsConfig(items, e.bootstrapDNS, timeout, e.logger)
+	newConf, err := prepareUpstreamsConfig(ctx, items, e.bootstrapDNS, timeout, e.logger)
 	if err != nil {
 		if newConf != nil {
 			_ = newConf.Close()
 		}
 		return err
 	}
-	e.replaceUpstreams(newConf)
+	if err = e.replaceUpstreamsContext(ctx, newConf); err != nil {
+		_ = newConf.Close()
+		return err
+	}
 	return nil
 }
 
 func (e *DNSProxyEngine) replaceUpstreams(newConf *dnsproxy.UpstreamConfig) {
-	e.mu.Lock()
+	_ = e.replaceUpstreamsContext(context.Background(), newConf)
+}
+
+func (e *DNSProxyEngine) replaceUpstreamsContext(ctx context.Context, newConf *dnsproxy.UpstreamConfig) error {
+	if err := e.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer e.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Request handlers share this lock: a swap waits for active queries before
 	// replacing the configuration or closing their transports.
 	oldConf := *e.upstreams
 	*e.upstreams = *newConf
 	_ = oldConf.Close()
+	return nil
 }
 
 func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver, error) {
+	c = c.Clone()
 	if err := c.normalize(); err != nil {
 		return nil, nil, err
 	}
@@ -124,7 +151,9 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve TCP listen address: %w", err)
 	}
-	upstreams, err := prepareUpstreamsConfig(c.Upstreams, c.BootstrapDNS, c.Timeout, logger)
+	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	defer cancel()
+	upstreams, err := prepareUpstreamsConfig(ctx, c.Upstreams, c.BootstrapDNS, c.Timeout, logger)
 	if err != nil {
 		if upstreams != nil {
 			_ = upstreams.Close()
@@ -145,7 +174,7 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 		TCPListenAddr:  []*net.TCPAddr{tcpAddr},
 		// Every client request must reach upstream, including repeated queries.
 		CacheEnabled:    false,
-		DNSSECEnabled:   anyDNSSEC(c),
+		DNSSECEnabled:   false, // Per-generation upstream adapter works with cache disabled.
 		MaxGoroutines:   2048,
 		UDPBufferSize:   1 << 20,
 		PendingRequests: &dnsproxy.PendingRequestsConfig{Enabled: false},
@@ -156,7 +185,7 @@ func NewDNSProxyEngine(c Config, logger *log.Logger) (*DNSProxyEngine, *Resolver
 		return nil, nil, fmt.Errorf("create DNS proxy: %w", err)
 	}
 	engine.proxy = engineProxy
-	return engine, &Resolver{engine: engine, local: &dns.Client{Net: "udp", Timeout: c.Timeout}, localAddr: c.Listen, timeout: c.Timeout, requests: ring}, nil
+	return engine, &Resolver{engine: engine, requests: ring}, nil
 }
 
 func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg, error) {
@@ -213,7 +242,10 @@ func (e *DNSProxyEngine) ResolveMsg(ctx context.Context, req *dns.Msg) (*dns.Msg
 
 type requestLogHandler struct {
 	ring     *DNSRequestRing
-	configMu *sync.RWMutex
+	configMu interface {
+		RLock()
+		RUnlock()
+	}
 }
 
 func (h requestLogHandler) ServeDNS(ctx context.Context, p *dnsproxy.Proxy, dctx *dnsproxy.DNSContext) (err error) {
@@ -324,13 +356,6 @@ func attemptFromStats(number int, stats *dnsproxy.QueryStatistics, err error, el
 	return attempt
 }
 
-func responseCode(response *dns.Msg) string {
-	if response == nil {
-		return ""
-	}
-	return dns.RcodeToString[response.Rcode]
-}
-
 func protocolName(proto any) string {
 	return fmt.Sprint(proto)
 }
@@ -351,17 +376,6 @@ func requestResult(err error, response *dns.Msg, stats *dnsproxy.QueryStatistics
 		return "ERROR"
 	}
 	return "ERROR"
-}
-
-func isTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return errors.Is(err, context.DeadlineExceeded)
-	}
-	var timeout net.Error
-	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 func statsContainTimeout(stats *dnsproxy.QueryStatistics) bool {
@@ -396,33 +410,6 @@ func statsErrorSummary(stats *dnsproxy.QueryStatistics) string {
 	return strings.Join(messages, "; ")
 }
 
-func answerIPs(msg *dns.Msg) []string {
-	if msg == nil {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	out := make([]string, 0)
-	for _, rr := range msg.Answer {
-		var ip net.IP
-		switch v := rr.(type) {
-		case *dns.A:
-			ip = v.A
-		case *dns.AAAA:
-			ip = v.AAAA
-		}
-		if ip == nil {
-			continue
-		}
-		value := ip.String()
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
 func (e *DNSProxyEngine) Start(ctx context.Context) error {
 	if err := e.proxy.Start(ctx); err != nil {
 		_ = e.upstreams.Close()
@@ -430,7 +417,11 @@ func (e *DNSProxyEngine) Start(ctx context.Context) error {
 	}
 	e.started = true
 	e.ipc = newDNSIPCServer(e.requests, e)
-	e.ipc.start()
+	if err := e.ipc.start(); err != nil {
+		_ = e.proxy.Shutdown(ctx)
+		e.started = false
+		return fmt.Errorf("start DNS control pipe: %w", err)
+	}
 	return nil
 }
 
@@ -474,137 +465,5 @@ func (r bootstrapMap) LookupNetIP(ctx context.Context, network, host string) ([]
 	}
 	return nil, fmt.Errorf("no bootstrap IP prepared for %s", host)
 }
-func upstreamBootstrap(item Upstream) (string, []string, error) {
-	if strings.HasPrefix(strings.ToLower(item.URL), "sdns://") {
-		stamp, err := dnsstamps.NewServerStampFromString(item.URL)
-		if err != nil {
-			return "", nil, err
-		}
-		addresses := append([]string(nil), item.Bootstrap...)
-		if len(addresses) == 0 && stamp.ServerAddrStr != "" {
-			addresses = append(addresses, stamp.ServerAddrStr)
-		}
-		return stamp.ProviderName, addresses, nil
-	}
-	return hostnameFromURL(item.URL), append([]string(nil), item.Bootstrap...), nil
-}
-
-func hostnameFromURL(raw string) string {
-	start := strings.Index(raw, "://")
-	if start < 0 {
-		return raw
-	}
-	rest := raw[start+3:]
-	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
-		rest = rest[:end]
-	}
-	if at := strings.LastIndexByte(rest, '@'); at >= 0 {
-		rest = rest[at+1:]
-	}
-	if host, _, err := net.SplitHostPort(rest); err == nil {
-		return host
-	}
-	return strings.Trim(rest, "[]")
-}
-func anyDNSSEC(c Config) bool {
-	for _, u := range c.Upstreams {
-		if u.DNSSEC {
-			return true
-		}
-	}
-	return false
-}
 
 var _ proxyupstream.Resolver = bootstrapMap(nil)
-
-func resolveHostViaBootstrapDNS(servers []string, host string, timeout time.Duration, logger *log.Logger) ([]netip.Addr, error) {
-	if len(servers) == 0 {
-		servers = DefaultBootstrapDNS
-	}
-	fqdn := dns.Fqdn(host)
-	clientTimeout := 1500 * time.Millisecond
-	if timeout > 0 && timeout < clientTimeout {
-		clientTimeout = timeout
-	}
-
-	type lookupResult struct {
-		server string
-		ips    []netip.Addr
-		err    error
-	}
-
-	for attempt := 0; attempt < 3; attempt++ {
-		resCh := make(chan lookupResult, len(servers))
-		for _, srv := range servers {
-			go func(server string) {
-				ips, err := queryBootstrapServer(server, fqdn, clientTimeout)
-				resCh <- lookupResult{server: server, ips: ips, err: err}
-			}(srv)
-		}
-
-		var firstErr error
-		for i := 0; i < len(servers); i++ {
-			res := <-resCh
-			if res.err == nil && len(res.ips) > 0 {
-				if logger != nil {
-					logger.Printf("bootstrap DNS: resolved %s via %s to %v", host, res.server, res.ips)
-				}
-				return res.ips, nil
-			}
-			if firstErr == nil && res.err != nil {
-				firstErr = res.err
-			}
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	ips, lookupErr := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if lookupErr == nil && len(ips) > 0 {
-		return ips, nil
-	}
-	return nil, fmt.Errorf("bootstrap lookup %s via %v failed: %w", host, servers, lookupErr)
-}
-
-func queryBootstrapServer(server, fqdn string, timeout time.Duration) ([]netip.Addr, error) {
-	networks := []string{"udp", "tcp"}
-	var found []netip.Addr
-	var lastErr error
-
-	for _, network := range networks {
-		c := &dns.Client{Net: network, Timeout: timeout}
-		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
-			msg := new(dns.Msg)
-			msg.SetQuestion(fqdn, qtype)
-			msg.RecursionDesired = true
-			resp, _, err := c.Exchange(msg, server)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if resp == nil || resp.Rcode != dns.RcodeSuccess {
-				continue
-			}
-			for _, ans := range resp.Answer {
-				switch r := ans.(type) {
-				case *dns.A:
-					if addr, ok := netip.AddrFromSlice(r.A); ok {
-						found = append(found, addr.Unmap())
-					}
-				case *dns.AAAA:
-					if addr, ok := netip.AddrFromSlice(r.AAAA); ok {
-						found = append(found, addr.Unmap())
-					}
-				}
-			}
-		}
-		if len(found) > 0 {
-			return found, nil
-		}
-	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("no A or AAAA records found for %s", fqdn)
-}

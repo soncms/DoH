@@ -1,0 +1,145 @@
+name: Disposable Windows service lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_disposable:
+        description: 'Install the real service/driver on a temporary GitHub VM; use Windows Actions minutes'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-lifecycle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Require the disposable hosted runner and record context
+        env:
+          SONDNS_DISPOSABLE_ACK: ${{ inputs.confirm_disposable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Never move this job to a self-hosted runner. Hypervisor detection
+          # alone does not establish that a machine is safe to discard.
+          if ($env:GITHUB_ACTIONS -cne 'true' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or
+              $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or
+              $env:RUNNER_ARCH -cne 'X64' -or $env:SONDNS_DISPOSABLE_ACK -cne 'true') {
+            throw 'Requires manual acknowledgement and a disposable GitHub-hosted Windows amd64 runner'
+          }
+          $reports = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-reports'
+          New-Item -ItemType Directory -Path $reports | Out-Null
+          $os = Get-CimInstance Win32_OperatingSystem
+          [ordered]@{
+            repository = $env:GITHUB_REPOSITORY; sourceCommit = $env:GITHUB_SHA
+            runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT
+            runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            runnerEnvironment = $env:RUNNER_ENVIRONMENT; runnerArch = $env:RUNNER_ARCH
+            imageOS = $env:ImageOS; imageVersion = $env:ImageVersion
+            windows = $os.Caption; windowsBuild = $os.BuildNumber
+            isolation = 'GitHub-hosted ephemeral VM, discarded after job; no local snapshot'
+            operatorConfirmedDisposableVM = $true; fullReleaseValidationPassed = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $reports 'runner.json') -Encoding utf8
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build application and harness from the same verified source ZIP
+        id: build
+        env:
+          SONDNS_FILESYSTEM_TEST_PARENT: 'C:\'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reports = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-reports'
+          $work = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-build'
+          $version = "ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$($env:GITHUB_SHA.Substring(0,12))"
+          # Finish dependency/native-source downloads before DNS interception.
+          ./scripts/package-source.ps1 -Version $version -OutputDirectory "$work/source"
+          $source = Join-Path $work 'Source with spaces'
+          [IO.Compression.ZipFile]::ExtractToDirectory("$work/source/SonDNS-source-$version.zip", $source)
+          & "$source/scripts/verify-source.ps1" -Root $source
+          $manifest = Get-Content -LiteralPath "$source/source-package.json" -Raw | ConvertFrom-Json
+          if ($manifest.sourceCommit -cne $env:GITHUB_SHA -or $manifest.sourceDirty) {
+            throw 'The hosted source package must identify this exact clean checkout'
+          }
+          Copy-Item -LiteralPath "$source/source-package.json" -Destination $reports
+          Copy-Item -LiteralPath "$work/source/SonDNS-source-$version.zip.sha256" -Destination $reports
+          $env:GOPROXY = 'off'
+          $env:GOSUMDB = 'off'
+          $env:GOTOOLCHAIN = 'local'
+          $env:GOFLAGS = '-mod=vendor'
+          $env:GOMODCACHE = Join-Path $work 'empty-modcache'
+          $env:GOCACHE = Join-Path $work 'empty-buildcache'
+          & "$source/scripts/build.ps1" -Version $version -OutputDirectory "$work/portable"
+          Copy-Item -LiteralPath "$work/portable/build-info.json" -Destination $reports
+          & "$source/scripts/package-windows-test-kit.ps1" -ApplicationDirectory "$work/portable" -OutputDirectory "$work/kits"
+          & "$source/scripts/verify-source.ps1" -Root $source -AllowBuildOutputs
+          if (@(Get-ChildItem -LiteralPath $env:GOMODCACHE -File -Recurse -ErrorAction SilentlyContinue).Count) {
+            throw 'The offline build unexpectedly populated its module cache'
+          }
+          $kit = Join-Path $work "kits/SonDNS-clean-windows-tests-$version"
+          Copy-Item -LiteralPath "$kit/test-kit.json" -Destination $reports
+          "SONDNS_CI_KIT=$kit" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Exercise the real service and WinDivert lifecycle
+        id: test
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            # This runner checks elevation and refuses any existing installation.
+            # In hosted CI the VM is discarded, instead of restoring a snapshot.
+            & "$env:SONDNS_CI_KIT/run-clean-windows-tests.ps1" -Mode Run -DisposableVM
+          } finally {
+            $kitReports = Join-Path $env:SONDNS_CI_KIT 'reports'
+            if (Test-Path -LiteralPath $kitReports) {
+              Copy-Item -LiteralPath $kitReports -Destination "$env:RUNNER_TEMP/sondns-lifecycle-reports/lifecycle" -Recurse
+            }
+          }
+      - name: Record the actual result and remaining validation
+        if: always()
+        env:
+          SONDNS_BUILD_OUTCOME: ${{ steps.build.outcome }}
+          SONDNS_TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reports = Join-Path $env:RUNNER_TEMP 'sondns-lifecycle-reports'
+          New-Item -ItemType Directory -Path $reports -Force | Out-Null
+          $results = @(Get-ChildItem -LiteralPath "$reports/lifecycle" -Filter result.json -Recurse -File -ErrorAction SilentlyContinue)
+          $passed = $false
+          if ($results.Count -eq 1 -and $env:SONDNS_TEST_OUTCOME -ceq 'success') {
+            $result = Get-Content -LiteralPath $results[0].FullName -Raw | ConvertFrom-Json
+            $passed = $result.testStarted -eq $true -and $result.lifecyclePassed -eq $true -and
+              $result.fullReleaseValidationPassed -eq $false
+          }
+          [ordered]@{
+            buildOutcome = $env:SONDNS_BUILD_OUTCOME; testOutcome = $env:SONDNS_TEST_OUTCOME
+            lifecyclePassed = $passed; fullReleaseValidationPassed = $false
+            stillRequired = @('alternate-account UAC', 'reboot and tray startup', 'live migration and rollback',
+              'DPI helper lifecycle', 'transparent IPv6 interception', 'publisher signing', 'maintainer release review')
+          } | ConvertTo-Json | Set-Content -LiteralPath "$reports/workflow-result.json" -Encoding utf8
+          @("Lifecycle pass observed: $passed", "", "Full release validation: false. Review the report and remaining manual cases.") |
+            Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          if ($env:SONDNS_TEST_OUTCOME -ceq 'success' -and -not $passed) {
+            throw 'A successful step without one explicit lifecycle PASS report is not sufficient'
+          }
+      # The kit runner performs cleanup before this upload. A forced job kill or
+      # failed service cleanup can prevent network uploads; discard the hosted VM.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-service-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sondns-lifecycle-reports/
+          if-no-files-found: error
+          retention-days: 7

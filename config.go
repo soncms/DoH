@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ameshkov/dnsstamps"
 )
 
 // Config is deliberately JSON so the service has no third-party config parser
@@ -51,6 +53,7 @@ type Upstream struct {
 const (
 	ProviderSonCMS  = "SonCMS"
 	ProviderNextDNS = "NextDNS"
+	ProviderCustom  = "Custom (saved configuration)"
 
 	URLSonCMS  = "https://dns.soncms.net/dns-query/sondns"
 	URLNextDNS = "https://dns.nextdns.io/2e2e3c"
@@ -88,13 +91,17 @@ func PredefinedUpstream(name string) Upstream {
 }
 
 func (c *Config) CurrentProvider() string {
-	if len(c.Upstreams) > 0 {
-		u := strings.ToLower(c.Upstreams[0].URL)
-		if strings.Contains(u, "nextdns") {
-			return ProviderNextDNS
-		}
+	if len(c.Upstreams) != 1 {
+		return ProviderCustom
 	}
-	return ProviderSonCMS
+	switch c.Upstreams[0].URL {
+	case URLSonCMS:
+		return ProviderSonCMS
+	case URLNextDNS:
+		return ProviderNextDNS
+	default:
+		return ProviderCustom
+	}
 }
 
 // Accept both the human-friendly "5s" form and a numeric nanosecond value
@@ -169,14 +176,36 @@ func DefaultConfig() Config {
 }
 
 func defaultLogPath() string {
-	base := os.Getenv("ProgramData")
-	if base == "" {
-		base = "."
-	}
-	return filepath.Join(base, "SonDNS", "sondns.log")
+	return filepath.Join("data", "sondns.log")
 }
 
 func (c *Config) normalize() error {
+	if err := c.normalizeNetwork(); err != nil {
+		return err
+	}
+	items, err := normalizeUpstreams(c.Upstreams)
+	if err != nil {
+		return err
+	}
+	c.Upstreams = items
+	return c.DPI.normalize()
+}
+
+// Clone keeps candidate settings independent while an asynchronous GUI action
+// saves, applies, or rolls them back.
+func (c Config) Clone() Config {
+	c.BootstrapDNS = append([]string(nil), c.BootstrapDNS...)
+	c.Upstreams = append([]Upstream(nil), c.Upstreams...)
+	for i := range c.Upstreams {
+		c.Upstreams[i].Bootstrap = append([]string(nil), c.Upstreams[i].Bootstrap...)
+	}
+	c.DPI.Arguments = append([]string(nil), c.DPI.Arguments...)
+	c.DPI.Targets = append([]string(nil), c.DPI.Targets...)
+	c.DPI.Exclude = append([]string(nil), c.DPI.Exclude...)
+	return c
+}
+
+func (c *Config) normalizeNetwork() error {
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:5300"
 	}
@@ -189,48 +218,11 @@ func (c *Config) normalize() error {
 	if strings.TrimSpace(c.LogFile) == "" {
 		c.LogFile = defaultLogPath()
 	}
+	c.LogFile = portableLogPath(c.LogFile)
 	if len(c.BootstrapDNS) == 0 {
 		c.BootstrapDNS = append([]string(nil), DefaultBootstrapDNS...)
 	}
 	c.BootstrapDNS = normalizeBootstrapDNS(c.BootstrapDNS)
-	if len(c.Upstreams) == 0 {
-		return errors.New("at least one encrypted DNS upstream is required")
-	}
-	for i := range c.Upstreams {
-		u, err := url.Parse(c.Upstreams[i].URL)
-		if err != nil || !supportedUpstreamScheme(u.Scheme) || (u.Scheme != "sdns" && u.Hostname() == "") {
-			return fmt.Errorf("upstreams[%d].url must be an https://, tls://, quic://, or sdns:// endpoint", i)
-		}
-		if u.Scheme == "https" && u.Path == "" {
-			c.Upstreams[i].URL += "/dns-query"
-		}
-		if c.Upstreams[i].Type == "" {
-			switch u.Scheme {
-			case "tls":
-				c.Upstreams[i].Type = "DNS over TLS"
-			case "quic":
-				c.Upstreams[i].Type = "DNS over QUIC"
-			case "sdns":
-				c.Upstreams[i].Type = "DNS stamp"
-			default:
-				c.Upstreams[i].Type = "DNS over HTTPS"
-			}
-		}
-		if c.Upstreams[i].Name == "" {
-			c.Upstreams[i].Name = u.Hostname()
-			if c.Upstreams[i].Name == "" {
-				c.Upstreams[i].Name = "DNS stamp"
-			}
-		}
-		if len(c.Upstreams[i].Bootstrap) == 0 {
-			c.Upstreams[i].Bootstrap = bootstrapForHost(u.Hostname())
-		}
-		for _, addr := range c.Upstreams[i].Bootstrap {
-			if _, _, err := net.SplitHostPort(addr); err != nil {
-				return fmt.Errorf("upstreams[%d].bootstrap contains invalid address %q", i, addr)
-			}
-		}
-	}
 	c.Interception = strings.ToLower(strings.TrimSpace(c.Interception))
 	if c.Interception == "" {
 		c.Interception = "windivert"
@@ -238,30 +230,91 @@ func (c *Config) normalize() error {
 	if c.Interception != "windivert" {
 		return fmt.Errorf("interception must be windivert")
 	}
-	c.DPI.Backend = strings.ToLower(strings.TrimSpace(c.DPI.Backend))
-	if c.DPI.Backend == "" {
-		c.DPI.Backend = "embedded-zapret2"
+	return nil
+}
+
+// Both disk configuration and IPC updates pass through this validator before
+// bootstrap lookup or creation of any upstream transport.
+func normalizeUpstreams(items []Upstream) ([]Upstream, error) {
+	if len(items) == 0 {
+		return nil, errors.New("at least one encrypted DNS upstream is required")
 	}
-	if c.DPI.Backend != "embedded-zapret2" && c.DPI.Backend != "external" {
+	result := append([]Upstream(nil), items...)
+	for i := range result {
+		if err := normalizeUpstream(&result[i]); err != nil {
+			return nil, fmt.Errorf("upstreams[%d]: %w", i, err)
+		}
+	}
+	return result, nil
+}
+
+func normalizeUpstream(item *Upstream) error {
+	u, err := url.Parse(strings.TrimSpace(item.URL))
+	if err != nil || !supportedUpstreamScheme(u.Scheme) || (u.Scheme != "sdns" && u.Hostname() == "") {
+		return errors.New("url must be an https://, tls://, quic://, or sdns:// endpoint")
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	if u.Scheme == "sdns" {
+		stamp, err := dnsstamps.NewServerStampFromString(u.String())
+		if err != nil {
+			return fmt.Errorf("invalid DNS stamp: %w", err)
+		}
+		switch stamp.Proto {
+		case dnsstamps.StampProtoTypeDNSCrypt, dnsstamps.StampProtoTypeDoH, dnsstamps.StampProtoTypeTLS, dnsstamps.StampProtoTypeDoQ:
+		default:
+			return errors.New("DNS stamp must use an encrypted protocol")
+		}
+	}
+	if u.Scheme == "https" && u.Path == "" {
+		u.Path = "/dns-query"
+	}
+	item.URL = u.String()
+	if item.Type == "" {
+		item.Type = map[string]string{"https": "DNS over HTTPS", "tls": "DNS over TLS", "quic": "DNS over QUIC", "sdns": "DNS stamp"}[u.Scheme]
+	}
+	if item.Name == "" {
+		item.Name = u.Hostname()
+		if item.Name == "" {
+			item.Name = "DNS stamp"
+		}
+	}
+	item.Bootstrap = append([]string(nil), item.Bootstrap...)
+	if len(item.Bootstrap) == 0 {
+		item.Bootstrap = bootstrapForHost(u.Hostname())
+	}
+	for _, addr := range item.Bootstrap {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return fmt.Errorf("bootstrap contains invalid address %q", addr)
+		}
+	}
+	return nil
+}
+
+func (c *DPIConfig) normalize() error {
+	c.Backend = strings.ToLower(strings.TrimSpace(c.Backend))
+	if c.Backend == "" {
+		c.Backend = "embedded-zapret2"
+	}
+	if c.Backend != "embedded-zapret2" && c.Backend != "external" {
 		return fmt.Errorf("dpi_bypass.backend must be embedded-zapret2 or external")
 	}
-	c.DPI.CaptureMode = strings.ToLower(strings.TrimSpace(c.DPI.CaptureMode))
-	if c.DPI.CaptureMode == "" {
-		c.DPI.CaptureMode = "default"
+	c.CaptureMode = strings.ToLower(strings.TrimSpace(c.CaptureMode))
+	if c.CaptureMode == "" {
+		c.CaptureMode = "default"
 	}
-	if c.DPI.CaptureMode != "default" && c.DPI.CaptureMode != "tcp" && c.DPI.CaptureMode != "tcp+udp" {
+	if c.CaptureMode != "default" && c.CaptureMode != "tcp" && c.CaptureMode != "tcp+udp" {
 		return fmt.Errorf("dpi_bypass.capture_mode must be default, tcp, or tcp+udp")
 	}
-	if !c.DPI.FailOpen {
+	if !c.FailOpen {
 		// Fail-open is mandatory for the first integration: a helper failure
 		// must not turn into a system-wide connectivity outage.
-		c.DPI.FailOpen = true
+		c.FailOpen = true
 	}
-	for i, target := range c.DPI.Targets {
-		c.DPI.Targets[i] = strings.TrimSpace(target)
+	for i, target := range c.Targets {
+		c.Targets[i] = strings.TrimSpace(target)
 	}
-	for i, target := range c.DPI.Exclude {
-		c.DPI.Exclude[i] = strings.TrimSpace(target)
+	for i, target := range c.Exclude {
+		c.Exclude[i] = strings.TrimSpace(target)
 	}
 	return nil
 }
@@ -333,6 +386,7 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func SaveConfig(path string, c Config) error {
+	c = c.Clone()
 	if err := c.normalize(); err != nil {
 		return err
 	}
@@ -345,5 +399,21 @@ func SaveConfig(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	f, err := os.CreateTemp(filepath.Dir(path), ".sondns-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(append(b, '\n')); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

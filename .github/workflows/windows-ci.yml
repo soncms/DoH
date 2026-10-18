@@ -1,0 +1,83 @@
+name: Windows verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify runtime assets and core race tests
+        env:
+          SONDNS_FILESYSTEM_TEST_PARENT: 'C:\'
+        run: |
+          ./scripts/verify-assets.ps1
+          go test -race -json -timeout 2m ./... > "$env:RUNNER_TEMP/core-tests.json"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/core-tests.json"; exit 1 }
+      - name: Verify native Windows widgets
+        env:
+          SONDNS_UI_TEST: '1'
+        run: |
+          go test -json -run 'TestNative|TestAppIcon|TestProviderApply' -timeout 2m ./... > "$env:RUNNER_TEMP/gui-tests.json"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/gui-tests.json"; exit 1 }
+      - name: Verify isolated stopped-service startup transactions
+        env:
+          SONDNS_SCM_STARTUP_TEST: '1'
+        run: |
+          go test -json -run '^TestNativeSCMStartupTransaction$' -count=1 -timeout 2m ./... > "$env:RUNNER_TEMP/scm-startup-tests.json"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/scm-startup-tests.json"; exit 1 }
+      - name: Verify isolated stopped-service migration transactions
+        env:
+          SONDNS_SCM_MIGRATION_TEST: '1'
+        run: |
+          go test -json -run '^TestNativeSCMMigrationTransaction$' -count=1 -timeout 2m ./... > "$env:RUNNER_TEMP/scm-migration-tests.json"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:RUNNER_TEMP/scm-migration-tests.json"; exit 1 }
+      - name: Package application source and verify an offline rebuild
+        run: |
+          python -I -B -m unittest discover -s scripts -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $version = "ci-${{ github.sha }}"
+          ./scripts/package-source.ps1 -Version $version -OutputDirectory "$env:RUNNER_TEMP/source"
+          $source = "$env:RUNNER_TEMP/extracted-source"
+          [IO.Compression.ZipFile]::ExtractToDirectory("$env:RUNNER_TEMP/source/SonDNS-source-$version.zip", $source)
+          ./scripts/verify-source.ps1 -Root $source
+          $env:GOPROXY = 'off'
+          $env:GOSUMDB = 'off'
+          $env:GOTOOLCHAIN = 'local'
+          $env:GOFLAGS = '-mod=vendor'
+          $env:GOMODCACHE = "$env:RUNNER_TEMP/empty-modcache"
+          $env:GOCACHE = "$env:RUNNER_TEMP/empty-buildcache"
+          & "$source/scripts/build.ps1" -Version $version -OutputDirectory "$env:RUNNER_TEMP/portable"
+      # Publication requires separate signing and manual integration review.
+      # Upload only synthetic test logs from this verification workflow.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-test-reports
+          path: |
+            ${{ runner.temp }}/core-tests.json
+            ${{ runner.temp }}/gui-tests.json
+            ${{ runner.temp }}/scm-startup-tests.json
+            ${{ runner.temp }}/scm-migration-tests.json
+          if-no-files-found: ignore
+          retention-days: 7

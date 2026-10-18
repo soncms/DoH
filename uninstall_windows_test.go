@@ -23,7 +23,7 @@ func TestServiceBinaryPath(t *testing.T) {
 	}
 }
 
-func TestPurgeSonDNSInstallKeepsExecutableAndRemovesData(t *testing.T) {
+func TestServiceRemovalKeepsPortableAndLegacyFiles(t *testing.T) {
 	programData := t.TempDir()
 	t.Setenv("ProgramData", programData)
 	appDir := filepath.Join(programData, "SonDNS")
@@ -36,7 +36,11 @@ func TestPurgeSonDNSInstallKeepsExecutableAndRemovesData(t *testing.T) {
 	installDir := t.TempDir()
 	exe := filepath.Join(installDir, "SonDNS.exe")
 	backup := exe + ".bak-20261003-000000"
-	for _, path := range []string{exe, backup} {
+	if err := os.MkdirAll(filepath.Join(installDir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(installDir, "data", "sondns.json")
+	for _, path := range []string{exe, backup, config} {
 		if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -44,13 +48,9 @@ func TestPurgeSonDNSInstallKeepsExecutableAndRemovesData(t *testing.T) {
 	if err := purgeSonDNSInstall(exe); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
-		t.Fatalf("app data still exists: %v", err)
-	}
-	if _, err := os.Stat(backup); !os.IsNotExist(err) {
-		t.Fatalf("backup still exists: %v", err)
-	}
-	if _, err := os.Stat(exe); err != nil {
-		t.Fatalf("installed executable was removed: %v", err)
+	for _, path := range []string{exe, backup, config, filepath.Join(appDir, "sondns.json")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("service removal changed user files at %s: %v", path, err)
+		}
 	}
 }

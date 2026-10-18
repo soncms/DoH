@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && !console
 
 package main
 
@@ -84,6 +84,23 @@ func (g *guiState) build() error {
 	if err = mw.SetLayout(layout); err != nil {
 		return err
 	}
+	for _, section := range []func() error{g.buildConfigControls, g.buildRequestLog, g.buildStatus} {
+		if err := section(); err != nil {
+			return err
+		}
+	}
+	if err = mw.SetMinMaxSize(compactWindowSize, compactWindowSize); err != nil {
+		return err
+	}
+	if err = mw.SetSize(compactWindowSize); err != nil {
+		return err
+	}
+	g.updateActions()
+	return nil
+}
+
+func (g *guiState) buildConfigControls() error {
+	mw := g.mw
 	configRow, err := walk.NewComposite(mw)
 	if err != nil {
 		return err
@@ -132,7 +149,12 @@ func (g *guiState) build() error {
 	// Absorb the remaining row width after both controls so Walk does not
 	// distribute it between the labels and dropdowns.
 	_, _ = walk.NewHSpacer(configRow)
-	g.serviceButton, err = walk.NewSplitButton(configRow)
+	return g.buildServiceActions(configRow)
+}
+
+func (g *guiState) buildServiceActions(parent walk.Container) error {
+	var err error
+	g.serviceButton, err = walk.NewSplitButton(parent)
 	if err != nil {
 		return err
 	}
@@ -148,12 +170,24 @@ func (g *guiState) build() error {
 	g.uninstallAction = walk.NewAction()
 	_ = g.uninstallAction.SetText("Uninstall")
 	g.uninstallAction.Triggered().Attach(g.uninstallService)
-	for _, a := range []*walk.Action{g.stopAction, g.restartAction, g.uninstallAction} {
+	g.copyPortableAction = walk.NewAction()
+	_ = g.copyPortableAction.SetText("Create portable copy…")
+	g.copyPortableAction.Triggered().Attach(func() { g.offerSecurePortableCopy(g.config.Clone(), nil) })
+	g.migrateAction = walk.NewAction()
+	_ = g.migrateAction.SetText("Migrate existing service…")
+	g.migrateAction.Triggered().Attach(g.migrateService)
+	for _, a := range []*walk.Action{g.stopAction, g.restartAction, g.uninstallAction, g.migrateAction, g.copyPortableAction} {
 		if err = g.serviceButton.Menu().Actions().Add(a); err != nil {
 			return err
 		}
 	}
 
+	return nil
+}
+
+func (g *guiState) buildRequestLog() error {
+	mw := g.mw
+	var err error
 	// Keep the queried service state for logic/tests without spending a visible row.
 	g.serviceStatus, err = uiLabel(mw, "", false)
 	if err != nil {
@@ -173,6 +207,7 @@ func (g *guiState) build() error {
 		return err
 	}
 	_ = g.autoStart.SetText("Start with Windows")
+	_ = g.autoStart.SetToolTipText("Start the service and show the SonDNS tray for all Windows users")
 	_ = g.autoStart.SetMinMaxSize(walk.Size{Width: 138, Height: 24}, walk.Size{Width: 138, Height: 24})
 	g.clearButton, err = uiButton(logHeader, "Clear log", 72, 26, g.clearRequestLog)
 	if err != nil {
@@ -209,6 +244,11 @@ func (g *guiState) build() error {
 	g.requestLog.SizeChanged().Attach(g.resizeLogColumns)
 	g.setupRequestContextMenu()
 	g.resizeLogColumns()
+	return nil
+}
+
+func (g *guiState) buildStatus() error {
+	mw := g.mw
 	status, err := uiRow(mw, 16)
 	if err != nil {
 		return err
@@ -219,13 +259,6 @@ func (g *guiState) build() error {
 	}
 	_ = g.status.SetEllipsisMode(walk.EllipsisEnd)
 	_ = g.status.SetMinMaxSize(walk.Size{Width: 100, Height: 16}, walk.Size{Height: 16})
-	if err = mw.SetMinMaxSize(compactWindowSize, compactWindowSize); err != nil {
-		return err
-	}
-	if err = mw.SetSize(compactWindowSize); err != nil {
-		return err
-	}
-	g.updateActions()
 	return nil
 }
 

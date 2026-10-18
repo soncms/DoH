@@ -1,0 +1,32 @@
+[
+  {
+    "file": "windivert/LICENSE",
+    "url": "https://raw.githubusercontent.com/basil00/WinDivert/v2.2.2/LICENSE",
+    "sha256": "14a0cb5214d536e4fdae6aa3f5696f981eeda106cd026e9794bba489ee79d628"
+  },
+  {
+    "file": "cygwin/CYGWIN_LICENSE",
+    "url": "https://raw.githubusercontent.com/cygwin/cygwin/cygwin-3.4.10/winsup/CYGWIN_LICENSE",
+    "sha256": "794433752103cf4bbb4a84a1bdb8fbc150abb1762704bb35fecc9f7f820be984"
+  },
+  {
+    "file": "cygwin/COPYING",
+    "url": "https://raw.githubusercontent.com/cygwin/cygwin/cygwin-3.4.10/winsup/COPYING",
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  {
+    "file": "cygwin/COPYING.LIB",
+    "url": "https://raw.githubusercontent.com/cygwin/cygwin/cygwin-3.4.10/winsup/COPYING.LIB",
+    "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+  },
+  {
+    "file": "cygwin/COPYING.NEWLIB",
+    "url": "https://raw.githubusercontent.com/cygwin/cygwin/cygwin-3.4.10/COPYING.NEWLIB",
+    "sha256": "24d9cfecba7614ea685e74b869ac2396b252bfcf61d396999fa3805c9ddd4c58"
+  },
+  {
+    "file": "cygwin/COPYING.LIBGLOSS",
+    "url": "https://raw.githubusercontent.com/cygwin/cygwin/cygwin-3.4.10/COPYING.LIBGLOSS",
+    "sha256": "f3b7f3e4426b1fa6f60198dae7adfedd94b77b28db2d108adc0253575011e0ff"
+  }
+]

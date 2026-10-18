@@ -1,3 +1,5 @@
+//go:build !console
+
 package main
 
 import (
@@ -42,7 +44,7 @@ func (u *blockingUpstream) Close() error {
 	u.closedWhileActive.Store(u.active.Load())
 	return nil
 }
-func (u *blockingUpstream) Exchange(req *dns.Msg) (*dns.Msg, error) {
+func (u *blockingUpstream) Exchange(_ context.Context, req *dns.Msg) (*dns.Msg, error) {
 	u.active.Store(true)
 	close(u.entered)
 	<-u.release
@@ -132,7 +134,7 @@ type countingUpstream struct{ calls int }
 
 func (u *countingUpstream) Address() string { return "mock" }
 func (u *countingUpstream) Close() error    { return nil }
-func (u *countingUpstream) Exchange(req *dns.Msg) (*dns.Msg, error) {
+func (u *countingUpstream) Exchange(_ context.Context, req *dns.Msg) (*dns.Msg, error) {
 	u.calls++
 	if req.Question[0].Name == "fail.example." {
 		return nil, errors.New("offline")
@@ -171,7 +173,7 @@ type timeoutUpstream struct{}
 
 func (timeoutUpstream) Address() string { return "timeout" }
 func (timeoutUpstream) Close() error    { return nil }
-func (timeoutUpstream) Exchange(*dns.Msg) (*dns.Msg, error) {
+func (timeoutUpstream) Exchange(context.Context, *dns.Msg) (*dns.Msg, error) {
 	return nil, &net.DNSError{Err: "i/o timeout", IsTimeout: true}
 }
 

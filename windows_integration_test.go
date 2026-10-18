@@ -1,23 +1,28 @@
-//go:build windows
+//go:build windows && !console
 
 package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
-	"github.com/miekg/dns"
-	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/svc"
-	"golang.org/x/sys/windows/svc/mgr"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
-// Explicit opt-in only. Tests the real SCM with WinDivert off and restores the
+// Explicit opt-in only. Tests the real SCM with WinDivert enabled and restores the
 // absent service state on exit. Never replaces a user's installed SonDNS service.
 func TestWindowsServiceLifecycle(t *testing.T) {
 	if os.Getenv("SONDNS_SERVICE_TEST") != "1" {
@@ -42,17 +47,27 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	if driverErr == nil {
 		t.Skip("WinDivert already installed; leave the driver untouched")
 	}
-	binary, err := filepath.Abs("SonDNS.exe")
+	if !errors.Is(driverErr, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		t.Fatal(driverErr)
+	}
+	built, err := filepath.Abs(filepath.Join("dist", "SonDNS-Portable", "SonDNS.exe"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(binary); err != nil {
+	if override := os.Getenv("SONDNS_TEST_EXE"); override != "" {
+		built, err = filepath.Abs(override)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(built); err != nil {
 		t.Fatal("build SonDNS.exe before this test")
 	}
-	dir := t.TempDir()
 	config := DefaultConfig()
-	config.Interception = "off"
-	config.LogFile = filepath.Join(dir, "system.log")
+	stamp, fixtureCalls := startLocalEncryptedDNSFixture(t)
+	config.Upstreams = []Upstream{{URL: stamp}}
+	config.Interception = "windivert"
+	config.LogFile = filepath.Join("data", "system.log")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -60,20 +75,72 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 	config.Listen = ln.Addr().String()
 	_ = ln.Close()
 	config.Timeout = 3 * time.Second
-	path := filepath.Join(dir, "config.json")
-	checkGUIReadOnly := func() {
+	parent := os.Getenv("SONDNS_SERVICE_TEST_PARENT")
+	if parent == "" {
+		parent = filepath.VolumeName(built) + `\`
+	}
+	parent, err = filepath.Abs(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "SonDNS-service-test-"+rand.Text())
+	binary, err := createSecurePortableCopy(built, dir, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if remaining, err := queryServiceSnapshot(); err != nil || remaining.Exists {
+			t.Logf("Retaining service fixture at %s: state=%+v err=%v", dir, remaining, err)
+			return
+		}
+		manager, err := mgr.Connect()
+		if err != nil {
+			t.Errorf("retain fixture after SCM query failure: %v", err)
+			return
+		}
+		driver, driverErr := manager.OpenService(winDivertServiceName)
+		if driverErr == nil {
+			_ = driver.Close()
+		}
+		_ = manager.Disconnect()
+		if !errors.Is(driverErr, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			t.Logf("Retaining fixture at %s while driver registration may remain: %v", dir, driverErr)
+			return
+		}
+		if insideRoot(parent, dir) && strings.HasPrefix(filepath.Base(dir), "SonDNS-service-test-") {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Errorf("fixture cleanup: %v", err)
+			}
+		}
+	})
+	path := filepath.Join(dir, "data", "custom saved.json")
+	checkGUIReadOnly := func(implicit bool) {
 		t.Helper()
 		before, err := queryServiceSnapshot()
 		if err != nil {
 			t.Fatal(err)
 		}
 		configBefore, _ := os.ReadFile(path)
-		gui := exec.Command(binary, "gui", "--config", path)
+		args := []string{"gui", "--config", path}
+		if implicit {
+			args = []string{"gui"}
+		}
+		gui := exec.Command(binary, args...)
 		if err = gui.Start(); err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = gui.Process.Kill(); _ = gui.Wait() }()
 		time.Sleep(500 * time.Millisecond)
+		h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(gui.Process.Pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var exitCode uint32
+		err = windows.GetExitCodeProcess(h, &exitCode)
+		_ = windows.CloseHandle(h)
+		if err != nil || exitCode != 259 {
+			t.Fatalf("GUI exited during read-only startup: exit=%d error=%v", exitCode, err)
+		}
 		after, err := queryServiceSnapshot()
 		if err != nil || after != before {
 			t.Fatalf("opening GUI mutated service: before=%+v after=%+v %v", before, after, err)
@@ -119,7 +186,7 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 		if err = SaveConfig(path, config); err != nil {
 			t.Fatal(err)
 		}
-		checkGUIReadOnly()
+		checkGUIReadOnly(false)
 		command("install", "--config", path)
 		wait(svc.Running)
 		snap, err := queryServiceSnapshot()
@@ -127,56 +194,136 @@ func TestWindowsServiceLifecycle(t *testing.T) {
 			t.Fatalf("wrong installed mode: %+v %v", snap, err)
 		}
 		t.Logf("installed: %s", snap.text())
-		checkGUIReadOnly()
+		func() {
+			s, err := openSonDNSService(windows.SERVICE_QUERY_CONFIG)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if err := requireServiceConfigForExe(s, binary, path); err != nil {
+				t.Fatal(err)
+			}
+			binding, err := s.Config()
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected, err := implicitGUIConfigAt(binary, &binding)
+			if err != nil || !strings.EqualFold(selected, path) {
+				t.Fatalf("implicit GUI lost custom config: %s %v", selected, err)
+			}
+			tray, err := readMigrationTray(registry.LOCAL_MACHINE, runRegistryKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if auto {
+				want, err := guiTrayCommand(binary, path)
+				if err != nil || !tray.Exists || tray.Value != want {
+					t.Fatalf("tray lost custom service config: %+v %v", tray, err)
+				}
+			} else if tray.Exists {
+				t.Fatal("manual service unexpectedly has tray startup")
+			}
+		}()
+		checkGUIReadOnly(true)
 		if !auto {
 			// A real local UDP and TCP query exercises the service and RAM log IPC.
 			for _, network := range []string{"udp", "tcp"} {
 				msg := new(dns.Msg)
-				msg.SetQuestion("example.com.", dns.TypeA)
+				msg.SetQuestion("sondns-test.invalid.", dns.TypeA)
 				reply, _, err := (&dns.Client{Net: network, Timeout: 5 * time.Second}).Exchange(msg, config.Listen)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if reply == nil || !reply.Response {
-					t.Fatal("no DNS response")
-				}
+				requireEncryptedFixtureReply(t, msg, reply)
+			}
+			// TEST-NET-3 has no resolver. A pinned synthetic answer here proves
+			// transparent IPv4 UDP/53 interception rather than the local listener.
+			msg := new(dns.Msg)
+			msg.SetQuestion("sondns-test.invalid.", dns.TypeA)
+			reply, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(msg, "203.0.113.53:53")
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireEncryptedFixtureReply(t, msg, reply)
+			if fixtureCalls.Load() < 3 {
+				t.Fatal("service bypassed the encrypted fixture")
 			}
 			var rows []DNSRequestEntry
+			synthetic := 0
 			for n := 0; n < 20; n++ {
 				response, readErr := callDNSIPC(dnsIPCRequest{Op: "snapshot"})
 				err = readErr
 				rows = response.Entries
-				if len(rows) >= 2 {
+				synthetic = 0
+				for _, row := range rows {
+					if row.Domain == "sondns-test.invalid" {
+						synthetic++
+					}
+				}
+				if synthetic >= 3 {
 					break
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
-			if err != nil || len(rows) < 2 {
-				t.Fatalf("service didn't log both queries: %+v %v", rows, err)
+			if err != nil || synthetic < 3 {
+				t.Fatalf("service didn't log all synthetic queries: %+v %v", rows, err)
 			}
-			t.Logf("DNS log: %s, %s", rows[0].Result, rows[1].Result)
+			var lastID uint64
+			for _, row := range rows {
+				lastID = max(lastID, row.ID)
+			}
+			t.Logf("DNS log: %d synthetic requests, last observed ID %d", synthetic, lastID)
 			response, err := callDNSIPC(dnsIPCRequest{Op: "clear_log"})
 			if err != nil || response.Version == 0 {
 				t.Fatal(err)
 			}
 			response, err = callDNSIPC(dnsIPCRequest{Op: "snapshot"})
-			if err != nil || len(response.Entries) != 0 {
-				t.Fatal("clear didn't reset RAM log")
-			}
-			if err = setServiceAutoStart(true); err != nil {
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err = restartService(); err != nil {
-				t.Fatal(err)
+			// Background Windows queries may complete after Clear. They must
+			// have fresh IDs; none of the previously observed rows may survive.
+			for _, row := range response.Entries {
+				if row.ID <= lastID {
+					t.Fatal("clear retained a previously observed request")
+				}
 			}
-			wait(svc.Running)
-			snap, err = queryServiceSnapshot()
-			if err != nil || snap.StartType != windows.SERVICE_AUTO_START {
-				t.Fatal("restart reset autostart")
-			}
-			if err = setServiceAutoStart(false); err != nil {
-				t.Fatal(err)
-			}
+			// The fixture is a copied EXE. Test process ownership intentionally
+			// differs, so use a handle verified against that exact fixture path.
+			func() {
+				scm, err := mgr.Connect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer scm.Disconnect()
+				s, err := scm.OpenService(serviceName)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				bound, err := s.Config()
+				if err != nil || !strings.EqualFold(serviceBinaryPath(bound.BinaryPathName), binary) {
+					t.Fatalf("fixture service binding changed: %+v %v", bound, err)
+				}
+				if err = updateServiceStartup(scmStartupController{s}, true); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = s.Control(svc.Stop); err != nil {
+					t.Fatal(err)
+				}
+				wait(svc.Stopped)
+				if err = s.Start(); err != nil {
+					t.Fatal(err)
+				}
+				wait(svc.Running)
+				snap, err = queryServiceSnapshot()
+				if err != nil || snap.StartType != windows.SERVICE_AUTO_START {
+					t.Fatal("restart reset autostart")
+				}
+				if err = updateServiceStartup(scmStartupController{s}, false); err != nil {
+					t.Fatal(err)
+				}
+			}()
 		}
 		command("uninstall")
 		snap, err = queryServiceSnapshot()

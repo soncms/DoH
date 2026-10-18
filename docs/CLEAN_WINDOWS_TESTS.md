@@ -1,0 +1,105 @@
+# Disposable Windows test kit
+
+This optional maintainer kit contains SonDNS.exe, a prebuilt test harness, its
+runner, hashes and notices. It is separate from the single-EXE application.
+Both EXEs are built from the same verified source ZIP. No Go/Python installation
+or public DNS resolver is needed on the test VM. Do not run lifecycle tests on
+your working DNS machine. Take a clean Windows amd64 VM snapshot first, or use
+the explicitly dispatched disposable GitHub-hosted job described below.
+
+The harness has a loopback DNSCrypt upstream with a freshly pinned key and
+synthetic `sondns-test.invalid` answers. It never forwards requests to a public
+resolver, changes the system trust store or bypasses certificate verification.
+A connected virtual NIC with an IPv4 route is needed for the TEST-NET-3
+interception check; internet DNS service is not needed.
+
+## Run in the VM
+
+Extract the kit to a short local path and open PowerShell as administrator.
+Windows PowerShell 5.1 or PowerShell 7 is sufficient for the runner. Inspect
+the supplied hashes and source before trusting an unsigned preview/harness.
+
+```powershell
+./run-clean-windows-tests.ps1 -Mode Check
+./run-clean-windows-tests.ps1 -Mode Run -DisposableVM
+```
+
+Check mode records preflight only. Run mode requires no existing SonDNS service,
+WinDivert driver, SonDNS process or SonDNS HKLM Run value. It refuses to replace
+them. `-DisposableVM` records the operator's confirmation; detection of a
+hypervisor cannot prove the machine is disposable. The runner does not install
+Windows features, create a VM or reboot the computer.
+
+The lifecycle test creates a protected unique folder under the system drive,
+installs/starts/stops/restarts/uninstalls the real service and driver, checks
+custom config/Run bindings, launches the GUI without changes, tests local UDP
+and TCP DNS, and checks transparent IPv4 UDP/53 interception. It uses saved
+manual/automatic startup modes without rebooting. It removes its fixture when
+cleanup succeeds, and retains it when recovery is needed. Logs and JSON results
+are saved in `reports/` under the kit folder. A skipped lifecycle test is a
+failure of the runner, never a claimed pass.
+
+On timeout or failed cleanup, inspect `result.json`, its SCM paths and logs.
+Do not delete files underneath a surviving service/driver. Restore the VM
+snapshot after collecting the synthetic test report. Share the report, exact
+EXE/source hashes and Windows build; do not infer a pass from the exit code
+alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
+
+## Still manual
+
+This does not establish alternate-account UAC, reboot/tray startup, live
+migration/rollback, DPI helper lifecycle, transparent IPv6 interception,
+power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in
+the kit and RELEASING.md in the source package before release.
+
+## GitHub-hosted alternative
+
+`.github/workflows/windows-service-lifecycle.yml` is an optional manual workflow
+on a GitHub-hosted `windows-2022` VM. It never runs on push or pull requests.
+The workflow must first be published on the repository's default branch for
+GitHub to offer manual dispatch. Publishing it is separate from running it.
+Review the complete source changes before pushing them; the workflow builds
+the selected remote commit, not unpublished local edits or a previous EXE.
+
+In **Actions > Disposable Windows service lifecycle > Run workflow**, select
+the reviewed branch and explicitly enable `confirm_disposable`. This authorizes
+installing the actual service/driver on the temporary runner and using Windows
+Actions minutes. A private repository may incur charges after its included
+allowance. No separate VM, publisher certificate or repository secrets are
+required. The job has a read-only repository token, does not retain checkout
+credentials, and uploads reports rather than application/source ZIPs.
+
+All dependency and corresponding-source downloads finish before interception.
+The job packages and verifies the source ZIP, builds the GUI EXE and precompiled
+harness offline from that same extraction, and records hashes and runner/Windows
+metadata. The extracted path includes spaces. The existing kit runner still
+requires elevation, refuses existing SonDNS/WinDivert installations and treats
+a skipped test as failure. Build failure, skipped execution or a missing result
+does not establish a lifecycle pass.
+
+GitHub destroys the hosted VM at the end of the job; this is the isolation and
+recovery assumption instead of a local restore snapshot. Do not change this
+workflow to a self-hosted runner or run its lifecycle commands on a working PC.
+The kit runner attempts cleanup before report upload. Reports are retained for
+seven days. Forced cancellation or a surviving interception service may prevent
+upload; such a run supplies no successful evidence and the VM must be discarded.
+Download the reports promptly and review `result.json`, `workflow-result.json`,
+EXE/source hashes and logs. Even a real lifecycle pass keeps
+`fullReleaseValidationPassed=false` and leaves the manual cases above open.
+
+## Rebuild the kit
+
+After building the application from the actual extracted source ZIP, keep
+offline vendor settings and run its packaging script:
+
+```powershell
+$env:GOPROXY = 'off'
+$env:GOSUMDB = 'off'
+$env:GOTOOLCHAIN = 'local'
+$env:GOFLAGS = '-mod=vendor'
+./scripts/package-windows-test-kit.ps1 -ApplicationDirectory C:\build\portable -OutputDirectory C:\build\test-kits
+```
+
+The source manifest and application build-info must match. The packager never
+runs the lifecycle test. The source ZIP remains a separate release artifact;
+retain it alongside the application and test-kit archive for reproducibility.
