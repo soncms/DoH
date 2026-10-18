@@ -52,7 +52,7 @@ func (g *guiState) migrateService() {
 		g.setDNSProvider(g.config.CurrentProvider())
 		g.setDPIMode(g.config.DPI.Enabled, g.config.DPI.CaptureMode)
 	}, func(err error) {
-		g.setStatus("Migration failed; inspect the recovery report", true)
+		g.setStatus("Migration failed; review the error details", true)
 		walk.MsgBox(g.mw, "Migration failed", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 	})
 }

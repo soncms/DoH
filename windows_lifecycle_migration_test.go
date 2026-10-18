@@ -145,6 +145,21 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 	report.Before, report.TrayBefore = initial, trayBefore
 	report.SourceExeSHA256, report.SourceConfigSHA256 = p.SourceExeHash, p.SourceConfigHash
 	report.DestinationConfigBeforeSHA256 = migrationHash(targetBefore)
+	runLifecycleGUIRejects(t, p, &report.GUI, func() {
+		_ = prepare()
+		requireLifecycleMigrationService(t, s, initial)
+		requireLifecycleMigrationTray(t, trayBefore)
+		if !bytes.Equal(readLifecycleMigrationFile(t, targetConfig), targetBefore) ||
+			!bytes.Equal(readLifecycleMigrationFile(t, sourceConfig), sourceBefore) {
+			t.Fatal("GUI cancel/validation failure changed source or destination config bytes")
+		}
+		currentDPI := waitForLifecycleDPI(t, sourceHelper, 0)
+		if currentDPI.pid != oldDPI.pid {
+			t.Fatal("GUI cancel/validation failure restarted the old DPI process")
+		}
+		requireNoLifecycleDPI(t, targetHelper)
+		requireLifecycleMigrationDNS(t, settings.Listen)
+	})
 	locked := &lockedLifecycleMigration{scmMigrationService: scmMigrationService{s}, target: target}
 	backup, err := executeServiceMigration(p, locked, nativeMigrationHooks(p))
 	if backup != "" {
@@ -173,12 +188,9 @@ func runLifecycleMigration(t *testing.T, built, source, sourceConfig, parent str
 	t.Logf("live migration rollback after real SCM startup failure: %s (code %d); old DNS restored", locked.startErr, locked.startErrCode)
 
 	p = prepare()
-	backup, err = migrateExistingService(p)
+	backup = runLifecycleGUIMigrate(t, p, &report.GUI)
 	if backup != "" {
 		backups["complete"] = backup
-	}
-	if err != nil {
-		t.Fatal(err)
 	}
 	want := cloneServiceConfig(initial)
 	want.BinaryPathName = migrationCommand(p)
@@ -261,6 +273,7 @@ type lifecycleMigrationReport struct {
 	ImportedSettings                                            Config
 	RollbackBackup, CompletedBackup                             lifecycleMigrationBackupReport
 	RollbackVerified, MigrationVerified, CleanupVerified        bool
+	GUI                                                         lifecycleMigrationGUIReport
 }
 
 func readLifecycleMigrationFile(t *testing.T, path string) []byte {

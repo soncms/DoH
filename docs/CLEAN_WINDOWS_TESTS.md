@@ -54,10 +54,19 @@ whose image path matches the unique fixture. A quiet stop includes 500 ms withou
 harness DNS queries; Windows background DNS is not suppressed.
 
 The same opt-in test installs a running automatic service with custom settings,
-dependencies and delayed startup, then uses the production migration hooks.
+dependencies and delayed startup. It opens the built GUI's real service menu,
+checks the confirmation text and default No button, cancels, and requires exact
+service/tray/config snapshots and running DNS to remain unchanged. A real source
+config lock after confirmation must show a validation error without creating a
+backup or restarting the source helper. Each GUI process is reaped by its owned
+process handle. These procedures require a non-skipped pass on the tested commit.
 An exclusive lock on the candidate EXE forces a real SCM startup error; the test
 requires the previous binding and running DNS to recover, exact destination
 config bytes and tray value/type to survive, and all source/backup hashes to match.
+The subsequent successful migration is confirmed through the built GUI. Its
+success status must identify the actual backup directory and its controls must
+show the imported custom provider and TCP DPI mode before the usual backend
+SCM/config/backup/DNS assertions. This covers an already elevated session only.
 A subsequent successful migration checks imported settings, custom config/tray
 paths, unrelated SCM fields, UDP/TCP DNS and the old/new embedded DPI processes.
 Cleanup calls uninstall from the currently owning fixture EXE and verifies both
@@ -77,8 +86,8 @@ alone. `fullReleaseValidationPassed` remains false even after a lifecycle pass.
 
 ## Still manual
 
-This does not establish alternate-account UAC, reboot/tray startup, GUI migration
-confirmation/cancellation or all migration failure stages, DPI effectiveness/application compatibility,
+This does not establish alternate-account UAC, reboot/tray startup,
+all migration failure stages, DPI effectiveness/application compatibility,
 power-loss recovery or publisher signing. Complete RELEASE_TEST_PLAN.md in
 the kit and RELEASING.md in the source package before release.
 

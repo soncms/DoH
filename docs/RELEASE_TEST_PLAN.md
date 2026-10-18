@@ -24,9 +24,12 @@ lifecycle checks do not establish DPI effectiveness or application compatibility
 The harness additionally runs production migration hooks against a running
 service: a real SCM startup failure while the candidate image is exclusively
 locked must roll back and restore DNS, followed by a successful migration.
-It checks settings/SCM/tray snapshots, backup hashes and helper cleanup. This
-procedure still needs an explicit pass on each tested commit and does not cover
-GUI confirmation, UAC, power loss or every other failure stage below.
+It checks settings/SCM/tray snapshots, backup hashes and helper cleanup. The built
+GUI is also operated through its native menu/dialogs: default No, cancellation,
+a real pre-stage config lock failure, then successful migration with imported
+controls and a concrete backup path. Each procedure still needs an explicit
+pass on the tested commit. This covers an already elevated session; UAC, power
+loss and the other failure stages below remain separate cases.
 
 The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
 address and scoped link-local address, with timeout controls before/after the

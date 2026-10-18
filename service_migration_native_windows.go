@@ -140,7 +140,7 @@ func validateMigrationFiles(p serviceMigrationPlan) error {
 	} {
 		data, err := readMigrationFile(f.root, f.path, f.limit)
 		if err != nil {
-			return err
+			return fmt.Errorf("validate migration file %s: %w", f.path, err)
 		}
 		if migrationHash(data) != f.hash {
 			return fmt.Errorf("migration file changed; review it again: %s", f.path)

@@ -85,6 +85,9 @@ try {
     'live migration rollback after real SCM startup failure',
     'live migration completed: custom config, SCM fields, tray, backup hashes and DNS verified',
     'live migration cleanup verified: service, driver, tray and both helper paths absent',
+    'live GUI migration cancellation: default No, exact state and DNS unchanged',
+    'live GUI migration validation failure: actual file lock, no backup, exact state and DNS unchanged',
+    'live GUI migration success: confirmation, imported controls and concrete backup path verified',
     'IPv6 fixture before service: documentation and scoped link-local A/AAAA timed out',
     'transparent IPv6 documentation and scoped link-local A/AAAA replies verified',
     'IPv6 fixture after service: documentation and scoped link-local A/AAAA timed out')
@@ -96,7 +99,10 @@ try {
   if ($migration.RollbackVerified -ne $true -or $migration.MigrationVerified -ne $true -or
       $migration.CleanupVerified -ne $true -or $migration.SCMStartErrorCode -le 0 -or
       $migration.RollbackBackup.Status -cne 'rolled-back' -or $migration.CompletedBackup.Status -cne 'complete' -or
-      $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1) {
+      $migration.RollbackBackup.RuntimeFiles -lt 1 -or $migration.CompletedBackup.RuntimeFiles -lt 1 -or
+      $migration.GUI.CancelledUnchanged -ne $true -or $migration.GUI.ValidationFailureUnchanged -ne $true -or
+      $migration.GUI.Completed -ne $true -or $migration.GUI.DefaultButton -ne 7 -or
+      $migration.GUI.ProcessesReaped -ne 2) {
     throw 'The live migration/rollback report is incomplete'
   }
   $ipv6 = Get-Content -LiteralPath (Join-Path $reportRoot 'ipv6-dns.json') -Raw | ConvertFrom-Json
