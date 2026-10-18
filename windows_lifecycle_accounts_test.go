@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 )
 
 var lifecycleNetAPI = windows.NewLazySystemDLL("netapi32.dll")
@@ -31,6 +32,7 @@ var lifecycleCreateWithToken = windows.NewLazySystemDLL("advapi32.dll").NewProc(
 type lifecycleAccountReport struct {
 	Name, SID                                                        string
 	LogonType                                                        uint32
+	SCMState                                                         serviceSnapshot
 	Elevated, Administrator, ConfigRead, SCMRead, StateRead, LogRead bool
 	ConfigWriteDenied, SCMMutateDenied, PipeCreateDenied             uint32
 	RejectedOperations                                               []string
@@ -344,17 +346,19 @@ func readLifecycleAccountAccess(t *testing.T, path string, want []byte, report *
 		t.Fatalf("real account cannot read exact portable config: %v", err)
 	}
 	report.ConfigRead = true
-	if err := lifecycleSCMAccess(windows.SERVICE_QUERY_CONFIG | windows.SERVICE_QUERY_STATUS); err != nil {
-		t.Fatalf("real account cannot query the installed service: %v", err)
+	// The native GUI reads state/config from SCM and log rows from snapshot.
+	// IPC "state" is optional and implemented by the console engine only.
+	state, err := queryServiceSnapshot()
+	if err != nil || !state.Exists || state.State != svc.Running || state.StartType != windows.SERVICE_DEMAND_START {
+		t.Fatalf("real account cannot read running manual SCM state: %+v %v", state, err)
 	}
-	report.SCMRead = true
-	for _, op := range []string{"state", "snapshot"} {
-		response, err := callDNSIPC(dnsIPCRequest{Op: op})
-		if err != nil || !response.OK || response.SchemaVersion != 2 {
-			t.Fatalf("real account cannot read IPC %s: %+v %v", op, response, err)
-		}
+	report.SCMState = state
+	report.SCMRead, report.StateRead = true, true
+	response, err := callDNSIPC(dnsIPCRequest{Op: "snapshot"})
+	if err != nil || !response.OK || response.SchemaVersion != 2 || response.InstanceID == "" {
+		t.Fatalf("real account cannot read IPC log snapshot: %+v %v", response, err)
 	}
-	report.StateRead, report.LogRead = true, true
+	report.LogRead = true
 }
 
 func lifecycleLogHasID(t *testing.T, id uint64) bool {

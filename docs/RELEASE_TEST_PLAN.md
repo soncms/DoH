@@ -40,6 +40,8 @@ A pass proves those token/ACL/backend operations, not the credential prompt,
 secure desktop, Manage-button handoff or cross-account GUI/tray startup.
 The standard account uses an interactive logon; the administrator uses a batch
 logon. The fixture does not modify UAC or logon-right policies.
+It reads native service state through the production SCM query and log rows
+through IPC `snapshot`; it does not require console-only IPC `state` support.
 
 The IPv6 fixture additionally covers A/AAAA over UDP/IPv6 to a documentation
 address and scoped link-local address, with timeout controls before/after the

@@ -90,7 +90,8 @@ The lifecycle additionally creates two uniquely named temporary local Windows
 accounts (standard user with an interactive logon and separate administrator
 with a batch logon), authenticates them with random in-memory passwords, and
 exercises their real tokens against the running
-service. Standard-user config/SCM/IPC monitoring must work; config write, SCM
+service. Standard-user config reads, production SCM status/config queries and
+IPC log snapshots must work; config write, SCM
 mutation handles, pipe-server creation and IPC mutations must be denied. The
 separate elevated administrator must be able to open management handles and
 clear the actual service log. Config bytes must stay unchanged and DNS must
@@ -102,6 +103,8 @@ operate the Manage button, credential prompt, secure desktop or GUI/tray under
 the other account, and does not establish the full UAC handoff flow.
 Batch logon avoids using an identification-only UAC linked token as an
 impersonation token; it is a backend access check, not interactive elevation.
+Native service monitoring uses SCM plus IPC `snapshot`; the optional IPC
+`state` operation is implemented by the console engine, not the native engine.
 
 This does not establish alternate-account UAC, reboot/tray startup,
 all migration failure stages, DPI effectiveness/application compatibility,
