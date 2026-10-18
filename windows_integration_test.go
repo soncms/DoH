@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
